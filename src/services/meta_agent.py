@@ -2,7 +2,7 @@ class MetaAgent:
     def __init__(self):
         self.bias = 0.0
         self.patterns = {}
-        print("🧠 MetaAgent ready (multi-tf + pattern)")
+        print("🧠 MetaAgent ready (multi-tf + pattern + reward)")
 
     # ---------------- DECISION ----------------
     def decide(self, features):
@@ -11,7 +11,7 @@ class MetaAgent:
             if not price:
                 return "HOLD", 0.0
 
-            # 🔥 SAFE TF LOAD (fix NoneType bug)
+            # 🔥 SAFE TF LOAD
             m15 = features.get("m15_trend", 0)
             h1 = features.get("h1_trend", 0)
             h4 = features.get("h4_trend", 0)
@@ -37,7 +37,7 @@ class MetaAgent:
             vol_score = m15_vol + h1_vol + h4_vol
             confidence += vol_score * 0.05
 
-            # ---------------- PATTERN ----------------
+            # ---------------- PATTERN BOOST ----------------
             key = f"{trend_score}_{vol_score}_{action}"
             if key in self.patterns:
                 confidence += self.patterns[key]
@@ -74,7 +74,7 @@ class MetaAgent:
         profits = [t.get("profit", 0) for t in trades if t.get("profit") is not None]
         avg_profit = sum(profits) / len(profits) if profits else 0
 
-        # 🔥 GLOBAL LEARNING
+        # 🔥 GLOBAL LEARNING (WINRATE + PROFIT)
         self.bias = (winrate - 0.5) * 0.5
         self.bias += avg_profit * 2
         self.bias = max(-0.3, min(self.bias, 0.3))
@@ -85,10 +85,14 @@ class MetaAgent:
             action = t.get("signal")
             result = t.get("result")
 
-            if not features or not action or not result:
+            # 🔥 FIX: neignoruj valid data
+            if not features or not action:
                 continue
 
-            # 🔥 SAFE LOAD (fix crash)
+            if result not in ["WIN", "LOSS"]:
+                continue
+
+            # 🔥 SAFE LOAD (fix NoneType)
             m15 = features.get("m15_trend", 0)
             h1 = features.get("h1_trend", 0)
             h4 = features.get("h4_trend", 0)
@@ -105,12 +109,15 @@ class MetaAgent:
             if key not in self.patterns:
                 self.patterns[key] = 0.0
 
-            if result == "WIN":
-                self.patterns[key] += 0.02
-            else:
-                self.patterns[key] -= 0.02
+            # 🔥 BONUS: PROFIT-BASED LEARNING
+            profit = t.get("profit", 0)
 
-            # clamp
+            if result == "WIN":
+                self.patterns[key] += 0.02 + profit * 2
+            else:
+                self.patterns[key] -= 0.02 + abs(profit) * 2
+
+            # 🔒 CLAMP
             self.patterns[key] = max(-0.3, min(self.patterns[key], 0.3))
 
         print(
