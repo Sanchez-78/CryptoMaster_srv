@@ -1,47 +1,57 @@
+import time
 import requests
 from config import CANDLE_LIMIT
 
 BASE_URL = "https://api.binance.com/api/v3/klines"
 
-FIELDS = ["open_time", "open", "high", "low", "close", "volume",
-          "close_time", "quote_volume", "trades",
-          "taker_buy_base", "taker_buy_quote", "ignore"]
-
 
 def fetch_candles(symbol: str, interval: str) -> list[dict]:
-    params = {"symbol": symbol, "interval": interval, "limit": CANDLE_LIMIT}
-    response = requests.get(BASE_URL, params=params, timeout=10)
-    response.raise_for_status()
-    raw = response.json()
+    """Fetch OHLCV candles from Binance."""
+
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "limit": CANDLE_LIMIT,
+    }
+
+    data = _safe_request(BASE_URL, params)
+
+    if not data:
+        return []
+
     candles = []
-    for row in raw:
-        candle = dict(zip(FIELDS, row))
-        candles.append({
-            "open_time": int(candle["open_time"]),
-            "open":      float(candle["open"]),
-            "high":      float(candle["high"]),
-            "low":       float(candle["low"]),
-            "close":     float(candle["close"]),
-            "volume":    float(candle["volume"]),
-        })
+    for c in data:
+        try:
+            candles.append({
+                "open_time": int(c[0]),
+                "open": float(c[1]),
+                "high": float(c[2]),
+                "low": float(c[3]),
+                "close": float(c[4]),
+                "volume": float(c[5]),
+            })
+        except (ValueError, IndexError):
+            continue
+
     return candles
 
-import time
 
-def fetch_candles(symbol: str, interval: str) -> list[dict]:
-    for attempt in range(3):
+def _safe_request(url: str, params: dict, retries: int = 3, delay: int = 2):
+    """Retry wrapper for API calls."""
+
+    for attempt in range(retries):
         try:
-            response = requests.get(BASE_URL, params={
-                "symbol": symbol,
-                "interval": interval,
-                "limit": CANDLE_LIMIT
-            }, timeout=10)
-            response.raise_for_status()
-            raw = response.json()
-            break
-        except Exception:
-            if attempt == 2:
-                raise
-            time.sleep(1)
+            response = requests.get(url, params=params, timeout=10)
 
-"symbol": symbol,
+            if response.status_code == 200:
+                return response.json()
+
+            print(f"Binance API error: {response.status_code}")
+
+        except requests.RequestException as e:
+            print(f"Request failed: {e}")
+
+        time.sleep(delay)
+
+    print("Failed to fetch data from Binance after retries.")
+    return None

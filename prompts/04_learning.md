@@ -1,30 +1,30 @@
 <task>
-
-Implement evaluation and learning.
-
+Implement evaluation and learning system.
 </task>
 
-
-
 <requirements>
+- load past signals from Firebase
+- evaluate only signals older than EVAL_DELAY_HOURS
+- fetch actual price from Binance for evaluation
 
-\- compute pnl from signals
+<evaluation>
+- BUY = profit if price increased
+- SELL = profit if price decreased
+- HOLD = neutral
+</evaluation>
 
-\- compare prediction vs actual outcome
+<learning>
+- adjust weights based on outcome:
+  - correct prediction → reinforce weights
+  - wrong prediction → penalize weights
+- simple gradient-like update (no ML libraries)
+</learning>
 
-\- update model weights
-
-\- simple learning loop
-
-</requirements>
-
-
+<constraints>
+- keep it simple
+- no overengineering
+</constraints>
 
 <output>
-
-\- evaluator.py
-
+- src/services/evaluator.py
 </output>
-
-
-

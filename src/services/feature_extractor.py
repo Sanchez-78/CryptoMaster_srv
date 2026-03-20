@@ -1,171 +1,151 @@
-import statistics
+import numpy as np
 
-def _ema(values: list[float], period: int) -> list[float | None]:
-k = 2 / (period + 1)
-result = [None] * (period - 1)
-seed = sum(values[:period]) / period
-result.append(seed)
 
-```
-for v in values[period:]:
-    result.append(result[-1] * (1 - k) + v * k)
+def ema(prices, period=14):
+    return np.mean(prices[-period:])
 
-return result
-```
 
-def _rsi(closes: list[float], period: int = 14) -> list[float | None]:
-result = [None] * period
-gains, losses = [], []
+def rsi(prices, period=14):
+    deltas = np.diff(prices)
 
-```
-for i in range(1, period + 1):
-    delta = closes[i] - closes[i - 1]
-    gains.append(max(delta, 0))
-    losses.append(max(-delta, 0))
+    gains = [d for d in deltas[-period:] if d > 0]
+    losses = [-d for d in deltas[-period:] if d < 0]
 
-avg_gain = sum(gains) / period
-avg_loss = sum(losses) / period
+    avg_gain = np.mean(gains) if gains else 0
+    avg_loss = np.mean(losses) if losses else 0
 
-for i in range(period, len(closes) - 1):
-    delta = closes[i + 1] - closes[i]
-    avg_gain = (avg_gain * (period - 1) + max(delta, 0)) / period
-    avg_loss = (avg_loss * (period - 1) + max(-delta, 0)) / period
-    rs = avg_gain / avg_loss if avg_loss != 0 else float("inf")
-    result.append(100 - (100 / (1 + rs)))
+    if avg_loss == 0:
+        return 1
 
-return result
-```
+    rs = avg_gain / avg_loss
+    return rs / (1 + rs)
 
-def _macd(closes: list[float]) -> tuple[list, list]:
-ema12 = _ema(closes, 12)
-ema26 = _ema(closes, 26)
 
-```
-macd_line = [
-    (a - b) if a is not None and b is not None else None
-    for a, b in zip(ema12, ema26)
-]
+def macd(prices):
+    return ema(prices, 12) - ema(prices, 26)
 
-valid = [v for v in macd_line if v is not None]
-signal_raw = _ema(valid, 9)
-pad = len(macd_line) - len(valid)
-signal_line = [None] * pad + signal_raw
 
-return macd_line, signal_line
-```
+def bollinger(prices, period=20):
+    ma = np.mean(prices[-period:])
+    std = np.std(prices[-period:])
 
-def _bollinger(closes: list[float], period: int = 20) -> tuple[list, list, list]:
-upper, lower, mid = [], [], []
+    if std == 0:
+        return 0.5
 
-```
-for i in range(len(closes)):
-    if i < period - 1:
-        upper.append(None)
-        lower.append(None)
-        mid.append(None)
-        continue
+    lower = ma - 2 * std
+    upper = ma + 2 * std
 
-    window = closes[i - period + 1:i + 1]
-    mean = sum(window) / period
-    std = statistics.stdev(window)
+    return (prices[-1] - lower) / (upper - lower)
 
-    mid.append(mean)
-    upper.append(mean + 2 * std)
-    lower.append(mean - 2 * std)
 
-return upper, mid, lower
-```
+def atr(candles, period=14):
+    trs = []
 
-def _atr(candles: list[dict], period: int = 14) -> list[float | None]:
-trs = [None]
+    for i in range(1, len(candles)):
+        high = candles[i]["high"]
+        low = candles[i]["low"]
+        prev_close = candles[i - 1]["close"]
 
-```
-for i in range(1, len(candles)):
-    high = candles[i]["high"]
-    low = candles[i]["low"]
-    prev_close = candles[i - 1]["close"]
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close)
+        )
 
-    trs.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+        trs.append(tr)
 
-result = [None] * period
-valid_trs = [v for v in trs if v is not None]
+    if len(trs) < period:
+        return 0
 
-atr = sum(valid_trs[:period]) / period
-result.append(atr)
+    return sum(trs[-period:]) / period
 
-for tr in valid_trs[period:]:
-    atr = (atr * (period - 1) + tr) / period
-    result.append(atr)
 
-return result
-```
+def extract_features(candles):
+    closes = np.array([c["close"] for c in candles])
 
-def extract(candles: list[dict]) -> list[dict]:
-closes = [c["close"] for c in candles]
-volumes = [c["volume"] for c in candles]
+    return {
+        "rsi": float(rsi(closes)),
+        "macd": float(macd(closes) / closes[-1]),
+        "ema": float((ema(closes) - closes[-1]) / closes[-1]),
+        "bb": float(bollinger(closes)),
+        "atr": float(atr(candles) / closes[-1])
+    }
 
-```
-rsi = _rsi(closes)
-macd, signal = _macd(closes)
-bb_upper, bb_mid, bb_lower = _bollinger(closes)
-ema20 = _ema(closes, 20)
-ema50 = _ema(closes, 50)
-atr = _atr(candles)
 
-features = []
+def extract_multi_tf_features(candles_m15, candles_h1, candles_h4):
+    f15 = extract_features(candles_m15)
+    f1h = extract_features(candles_h1)
+    f4h = extract_features(candles_h4)
 
-for i, candle in enumerate(candles):
-    close = candle["close"]
+    features = {}
 
-    if (
-        rsi[i] is None or macd[i] is None or signal[i] is None or
-        ema20[i] is None or ema50[i] is None or
-        bb_upper[i] is None or bb_lower[i] is None or
-        atr[i] is None
-    ):
-        continue
+    # merge
+    for k, v in f15.items():
+        features[f"{k}_m15"] = v
 
-    # Momentum
-    return_1 = (closes[i] - closes[i - 1]) / closes[i - 1] if i > 0 else 0
-    return_3 = (closes[i] - closes[i - 3]) / closes[i - 3] if i > 2 else 0
+    for k, v in f1h.items():
+        features[f"{k}_h1"] = v
 
-    # MACD diff
-    macd_diff = macd[i] - signal[i]
+    for k, v in f4h.items():
+        features[f"{k}_h4"] = v
 
-    # Trend strength
-    trend_strength = (ema20[i] - ema50[i]) / close
+    # =========================
+    # TREND
+    # =========================
+    trend_score = (
+        f15.get("ema", 0) +
+        f1h.get("ema", 0) * 2 +
+        f4h.get("ema", 0) * 3
+    )
 
-    # Bollinger width
-    bb_width = (bb_upper[i] - bb_lower[i]) / close
+    if trend_score > 0.001:
+        trend = "BULL"
+    elif trend_score < -0.001:
+        trend = "BEAR"
+    else:
+        trend = "NEUTRAL"
 
-    features.append({
-        "open_time": candle["open_time"],
-        "close": close,
+    features["trend"] = trend
 
-        # normalized core features
-        "rsi": rsi[i] / 100,
-        "macd": macd[i],
-        "macd_signal": signal[i],
-        "macd_diff": macd_diff,
+    # =========================
+    # VOLATILITY
+    # =========================
+    atr_val = f15.get("atr", 0)
 
-        "ema20": ema20[i],
-        "ema50": ema50[i],
-        "trend_strength": trend_strength,
+    if atr_val < 0.002:
+        volatility = "LOW"
+    elif atr_val > 0.02:
+        volatility = "HIGH"
+    else:
+        volatility = "NORMAL"
 
-        "bb_upper": bb_upper[i],
-        "bb_mid": bb_mid[i],
-        "bb_lower": bb_lower[i],
-        "bb_width": bb_width,
+    features["volatility"] = volatility
 
-        "atr": atr[i],
+    # =========================
+    # REGIME
+    # =========================
+    ema_m15 = f15.get("ema", 0)
+    ema_h1 = f1h.get("ema", 0)
+    ema_h4 = f4h.get("ema", 0)
 
-        # volume normalized
-        "volume": volumes[i] / 1_000_000,
+    bb = f15.get("bb", 0)
 
-        # momentum
-        "return_1": return_1,
-        "return_3": return_3,
-    })
+    trend_strength = abs(ema_m15) + abs(ema_h1) * 2 + abs(ema_h4) * 3
 
-return features
-```
+    is_sideways = trend_strength < 0.002 and 0.4 < bb < 0.6
+    is_volatile = atr_val > 0.02
+
+    if is_sideways:
+        regime = "SIDEWAYS"
+    elif is_volatile:
+        regime = "VOLATILE"
+    elif ema_h4 > 0 and ema_h1 > 0:
+        regime = "BULL_TREND"
+    elif ema_h4 < 0 and ema_h1 < 0:
+        regime = "BEAR_TREND"
+    else:
+        regime = "UNCERTAIN"
+
+    features["regime"] = regime
+
+    return features
