@@ -5,6 +5,11 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from src.services.firebase_client import db, update_signal
 from src.services.learning import update_model_weights
 from src.services.binance_client import fetch_candles
+from src.services.firebase_client import get_db
+
+db = get_db()
+if db is None:
+    return
 
 
 EVAL_DELAY_HOURS = 1

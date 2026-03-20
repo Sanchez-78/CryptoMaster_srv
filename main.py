@@ -9,8 +9,7 @@ from src.services.firebase_client import (
     load_open_signals
 )
 
-from src.services.market_data import get_candles
-from src.services.feature_extractor import extract_multi_tf_features
+from src.services.market_data import get_price
 from src.services.meta_agent import MetaAgent
 from src.services.evaluator import evaluate_signals
 
@@ -26,7 +25,7 @@ MAX_OPEN_TRADES = 5
 
 
 # -------------------------------
-# RISK MANAGEMENT (BONUS)
+# RISK MANAGEMENT
 # -------------------------------
 
 def should_trade(action, confidence, open_trades):
@@ -49,13 +48,26 @@ def bootstrap_mode(total_signals):
 
 
 # -------------------------------
+# SIMPLE FEATURE GENERATOR (fallback)
+# -------------------------------
+
+def build_features(price):
+    return {
+        "price": price,
+        "trend": "BULL",          # placeholder
+        "volatility": "NORMAL",   # placeholder
+        "regime": "SIMPLIFIED"
+    }
+
+
+# -------------------------------
 # PIPELINE
 # -------------------------------
 
 def run_pipeline():
     print("\n=== START PIPELINE ===")
 
-    # 🔥 KRITICKÉ
+    # 🔥 vždy init
     init_firebase()
 
     try:
@@ -70,22 +82,16 @@ def run_pipeline():
 
             try:
                 # -------------------------------
-                # MARKET DATA
+                # GET PRICE (NO BLOCK)
                 # -------------------------------
 
-                candles_m15 = get_candles(symbol, "15")
-                candles_h1 = get_candles(symbol, "60")
-                candles_h4 = get_candles(symbol, "240")
+                price = get_price(symbol)
 
-                features = extract_multi_tf_features(
-                    candles_m15,
-                    candles_h1,
-                    candles_h4
-                )
-
-                if not features:
-                    print("⚠️ Skipping - no features")
+                if not price:
+                    print("⚠️ No price data")
                     continue
+
+                features = build_features(price)
 
                 print("DEBUG FEATURES:", features)
 
@@ -98,7 +104,7 @@ def run_pipeline():
                 print(f"🤖 FINAL: {action} ({confidence})")
 
                 # -------------------------------
-                # BOOTSTRAP MODE
+                # BOOTSTRAP
                 # -------------------------------
 
                 if bootstrap_mode(len(all_signals)):
@@ -111,10 +117,8 @@ def run_pipeline():
                     continue
 
                 # -------------------------------
-                # EXECUTE TRADE
+                # SAVE SIGNAL
                 # -------------------------------
-
-                price = features.get("price", 0)
 
                 signal = {
                     "symbol": symbol,
