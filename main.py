@@ -1,151 +1,87 @@
+from src.services.binance_client import get_price
+from src.features.multi_tf import extract_multi_tf_features
+from src.ai.meta_agent import MetaAgent
+from src.storage.firebase import save_signal, load_recent_trades
+from src.filters.signal_filter import filter_signal
+
 import time
-import traceback
-from datetime import datetime, UTC
+import random
 
-from src.services.firebase_client import (
-    init_firebase,
-    save_signal,
-    load_recent_trades
-)
+# 🔥 FORCE LEARNING MODE
+LEARNING_MODE = True
 
-from src.services.market_data import get_all_prices
-from src.services.meta_agent import MetaAgent
-from src.services.evaluator import evaluate_signals
-from src.services.trade_filter import TradeFilter
+agent = MetaAgent()
 
 
-symbols = ["BTCUSDT", "ETHUSDT", "ADAUSDT"]
+# ---------------- SIMULACE ----------------
+def simulate_trade(action, price):
+    # fake future movement (pro learning)
+    future_price = price * (1 + random.uniform(-0.003, 0.003))
 
-meta_agent = MetaAgent()
-trade_filter = TradeFilter()
-
-last_prices = {}
-
-
-# ---------------- MULTI-TF FEATURES ----------------
-
-def build_features(symbol, price):
-    prev = last_prices.get(symbol, {})
-
-    def calc_tf(tf, multiplier):
-        prev_price = prev.get(tf)
-
-        change = 0 if not prev_price else (price - prev_price) / prev_price
-        trend = 1 if change > 0 else -1
-        volatility = 1 if abs(change) > (0.005 * multiplier) else 0
-
-        prev[tf] = price
-
-        return {
-            f"{tf}_change": change,
-            f"{tf}_trend": trend,
-            f"{tf}_volatility": volatility
-        }
-
-    m15 = calc_tf("m15", 1)
-    h1 = calc_tf("h1", 2)
-    h4 = calc_tf("h4", 4)
-
-    last_prices[symbol] = prev
-
-    return {
-        "price": price,
-        **m15,
-        **h1,
-        **h4
-    }
+    if action == "BUY":
+        return (future_price - price) / price
+    elif action == "SELL":
+        return (price - future_price) / price
+    return 0
 
 
-# ---------------- PIPELINE ----------------
-
-def run_pipeline():
-    print("\n=== START PIPELINE ===")
-
-    init_firebase()
-
+# ---------------- MAIN LOOP ----------------
+while True:
     try:
-        # 🔥 reset trade limiter
-        trade_filter.reset()
+        symbols = ["BTCUSDT", "ETHUSDT", "ADAUSDT"]
 
-        # 🔥 learning
-        trades = load_recent_trades(100)
-        meta_agent.learn_from_history(trades)
+        for symbol in symbols:
+            price = get_price(symbol)
 
-        prices = get_all_prices()
+            features = extract_multi_tf_features(symbol)
+            features["price"] = price
 
-        if not prices:
-            print("⚠️ fallback prices")
-            prices = {
-                "BTCUSDT": 60000,
-                "ETHUSDT": 3000,
-                "ADAUSDT": 0.5
+            action, confidence = agent.decide(features)
+
+            # 🔥 FILTER (override in learning mode)
+            filtered = filter_signal(symbol, action, confidence, features)
+
+            if filtered is None and not LEARNING_MODE:
+                print(f"{symbol} ❌ FILTERED")
+                continue
+
+            # 🔥 SIMULACE místo real trade
+            profit = simulate_trade(action, price)
+
+            result = "WIN" if profit > 0 else "LOSS"
+
+            signal_data = {
+                "symbol": symbol,
+                "signal": action,
+                "confidence": confidence,
+                "price": price,
+                "features": features,
+                "profit": profit,
+                "result": result,
+                "timestamp": int(time.time()),
+                "executed": False if LEARNING_MODE else True
             }
 
-        for symbol in symbols:
-            try:
-                price = prices.get(symbol)
-                if not price:
-                    continue
+            # 🔥 vždy ukládej
+            save_signal(signal_data)
 
-                features = build_features(symbol, price)
+            print(
+                f"{symbol} {action} | conf={round(confidence,2)} "
+                f"| profit={round(profit,5)} | {result}"
+            )
 
-                result = meta_agent.decide(features)
+        # 🔥 LOAD VÍC DAT
+        trades = load_recent_trades(1000)
 
-                if not result or not isinstance(result, tuple):
-                    print("⚠️ MetaAgent invalid:", result)
-                    action, confidence = "HOLD", 0.0
-                else:
-                    action, confidence = result
+        print(f"\n📦 LOADED TRADES: {len(trades)}")
 
-                print(f"{symbol} | {action} | {confidence:.2f}")
+        # 🔥 LEARNING
+        agent.learn_from_history(trades)
 
-                # 🔥 FILTER
-                allowed, reason = trade_filter.allow_trade(
-                    action, confidence, features
-                )
+        print("\n=============================\n")
 
-                if not allowed:
-                    print(f"{symbol} ❌ FILTERED: {reason}")
-                    continue
-
-                trade_filter.register_trade()
-
-                # 🔥 SIGNAL
-                signal = {
-                    "symbol": symbol,
-                    "signal": action,
-                    "confidence": float(confidence),
-                    "price": float(price),
-                    "features": features,
-                    "result": None,
-                    "profit": None,
-                    "age": 0,
-                    "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
-                    "evaluated": False,
-                    "mode": "learning"
-                }
-
-                save_signal(signal)
-
-            except Exception as e:
-                print(f"❌ {symbol} error:", e)
-                traceback.print_exc()
-
-        print("\n🧪 Evaluating...")
-
-        for symbol in symbols:
-            evaluate_signals(symbol)
+        time.sleep(5)
 
     except Exception as e:
-        print("❌ PIPELINE ERROR:", e)
-        traceback.print_exc()
-
-
-# ---------------- LOOP ----------------
-
-if __name__ == "__main__":
-    print("🔥 BOT STARTED")
-
-    while True:
-        run_pipeline()
-        time.sleep(60)
+        print("❌ MAIN ERROR:", e)
+        time.sleep(5)

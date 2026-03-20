@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "mcp__Desktop_Commander__list_directory",
-      "Bash(wc -l /c/Projects/CryptoMaster_srv/src/services/*.py)"
+      "Bash(wc -l /c/Projects/CryptoMaster_srv/src/services/*.py)",
+      "mcp__Desktop_Commander__read_file",
+      "mcp__Desktop_Commander__read_multiple_files",
+      "Bash(find C:ProjectsCryptoMaster_appsrc -type f -name *)",
+      "Bash(\"C:\\\\Projects\\\\CryptoMaster_app\\\\src\\\\screens\\\\DashboardScreen.js\")"
     ]
   }
 }
