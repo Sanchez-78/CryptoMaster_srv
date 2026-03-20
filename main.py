@@ -6,7 +6,7 @@ from src.services.firebase_client import (
     init_firebase,
     save_signal,
     load_all_signals,
-    load_open_signals
+    load_recent_trades
 )
 
 from src.services.market_data import get_all_prices
@@ -18,11 +18,10 @@ symbols = ["BTCUSDT", "ETHUSDT", "ADAUSDT"]
 meta_agent = MetaAgent()
 
 LEARNING_ONLY = True
-MAX_DAILY_DRAWDOWN = -0.05
-
 last_prices = {}
-kill_switch_active_until = 0
 
+
+# ---------------- FEATURES ----------------
 
 def build_features(symbol, price):
     prev_price = last_prices.get(symbol)
@@ -42,29 +41,7 @@ def build_features(symbol, price):
     }
 
 
-def check_kill_switch(signals):
-    global kill_switch_active_until
-
-    if time.time() < kill_switch_active_until:
-        return True
-
-    recent = [
-        s for s in signals
-        if s.get("evaluated") and s.get("profit") is not None
-    ][-20:]
-
-    if len(recent) < 10:
-        return False
-
-    total = sum(s["profit"] for s in recent)
-
-    if total < -0.05:
-        kill_switch_active_until = time.time() + 3600
-        print(f"🛑 KILL SWITCH ACTIVE | pnl={round(total,4)}")
-        return True
-
-    return False
-
+# ---------------- PIPELINE ----------------
 
 def run_pipeline():
     print("\n=== START PIPELINE ===")
@@ -72,13 +49,19 @@ def run_pipeline():
     init_firebase()
 
     try:
-        all_signals = load_all_signals()
-        kill = check_kill_switch(all_signals)
+        # 🔥 LEARNING STEP
+        trades = load_recent_trades(100)
+        meta_agent.learn_from_history(trades)
 
         prices = get_all_prices()
+
         if not prices:
-            print("❌ No prices")
-            return
+            print("⚠️ fallback prices")
+            prices = {
+                "BTCUSDT": 60000,
+                "ETHUSDT": 3000,
+                "ADAUSDT": 0.5
+            }
 
         for symbol in symbols:
             try:
@@ -88,11 +71,9 @@ def run_pipeline():
 
                 features = build_features(symbol, price)
 
-                # 🔥 SAFE CALL
                 result = meta_agent.decide(features)
 
-                if not result or not isinstance(result, tuple):
-                    print("⚠️ MetaAgent invalid:", result)
+                if not result:
                     action, confidence = "HOLD", 0.0
                 else:
                     action, confidence = result
@@ -113,14 +94,8 @@ def run_pipeline():
                     "mode": "learning"
                 }
 
-                # 🔥 LEARNING ONLY
-                if LEARNING_ONLY:
-                    save_signal(signal)
-                    continue
-
-                # trading vypnutý pokud kill switch
-                if kill:
-                    continue
+                # 🔥 vždy ukládej → učí se
+                save_signal(signal)
 
             except Exception as e:
                 print(f"❌ {symbol} error:", e)
