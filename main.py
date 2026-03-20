@@ -1,172 +1,160 @@
-from datetime import datetime, UTC
+import time
+import os
+import json
+import traceback
+from datetime import datetime
 
-from src.services.binance_client import fetch_candles
+# SERVICES
 from src.services.feature_extractor import extract_multi_tf_features
-
 from src.services.meta_agent import MetaAgent
-from src.services.self_evolving import SelfEvolvingSystem
+from src.services.portfolio_manager import PortfolioManager
+from src.services.profit_optimizer import ProfitOptimizer
 from src.services.stabilizer import Stabilizer
-from src.services.auto_strategy import AutoStrategy
-from src.services.real_market import RealMarket
-
 from src.services.firebase_client import (
+    init_firebase,
     save_signal,
     load_open_signals,
     load_all_signals,
+    update_signal
 )
-
 from src.services.evaluator import evaluate_signals
-from src.services.portfolio_manager import PortfolioManager
-from src.services.profit_optimizer import ProfitOptimizer
+from src.services.market_data import get_candles
 
+# -------------------------------
+# INIT
+# -------------------------------
+
+init_firebase()
+
+meta_agent = MetaAgent()
+portfolio = PortfolioManager()
+optimizer = ProfitOptimizer()
+stabilizer = Stabilizer()
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "ADAUSDT"]
 
-agent = MetaAgent()
-portfolio = PortfolioManager()
-optimizer = ProfitOptimizer()
-evolver = SelfEvolvingSystem()
-stabilizer = Stabilizer()
-auto_strat = AutoStrategy()
-market = RealMarket()
-
+# -------------------------------
+# CORE PIPELINE
+# -------------------------------
 
 def run_pipeline():
-    print("\n=== START PIPELINE ===\n")
+    print("\n=== START PIPELINE ===")
 
-    for symbol in SYMBOLS:
-        try:
+    try:
+        all_signals = load_all_signals()
+        print(f"📂 Loaded all signals: {len(all_signals)}")
+
+        for symbol in SYMBOLS:
             print(f"\n🔍 {symbol}")
 
-            m15 = fetch_candles(symbol, "15m")
-            h1 = fetch_candles(symbol, "1h")
-            h4 = fetch_candles(symbol, "4h")
+            try:
+                # -------------------------------
+                # MARKET DATA
+                # -------------------------------
+                candles_m15 = get_candles(symbol, "15m")
+                candles_h1 = get_candles(symbol, "1h")
+                candles_h4 = get_candles(symbol, "4h")
 
-            if not m15 or not h1 or not h4:
-                continue
+                # -------------------------------
+                # FEATURES
+                # -------------------------------
+                features = extract_multi_tf_features(
+                    candles_m15,
+                    candles_h1,
+                    candles_h4
+                )
 
-            raw_price = m15[-1]["close"]
+                print(f"DEBUG FEATURES: {features}")
 
-            features = extract_multi_tf_features(m15, h1, h4)
-            if not features:
-                continue
+                # -------------------------------
+                # AI DECISION
+                # -------------------------------
+                action, confidence = meta_agent.decide(features)
 
-            print("DEBUG FEATURES:", features)
+                print(f"🤖 FINAL: {action} ({confidence})")
 
-            # =========================
-            # 🤖 META AI
-            # =========================
-            signal, confidence = agent.decide(features)
+                # -------------------------------
+                # STABILIZER
+                # -------------------------------
+                if not stabilizer.allow_trade(action, confidence, all_signals):
+                    print("🚫 Blocked by stabilizer")
+                    continue
 
-            # =========================
-            # 🧪 AUTO STRATEGY
-            # =========================
-            auto_signal, auto_conf = auto_strat.decide(features)
-            if auto_conf > confidence:
-                print("🧪 AutoStrategy override")
-                signal, confidence = auto_signal, auto_conf
+                # -------------------------------
+                # OPTIMIZER
+                # -------------------------------
+                if not optimizer.allow_trade(action, confidence, features):
+                    print("🚫 Blocked by optimizer")
+                    continue
 
-            print(f"🤖 FINAL: {signal} ({confidence})")
+                # -------------------------------
+                # PORTFOLIO CHECK
+                # -------------------------------
+                open_signals = load_open_signals()
 
-            open_signals = load_open_signals()
+                if not portfolio.can_open_trade(open_signals):
+                    print("🚫 Portfolio limit reached")
+                    continue
 
-            # =========================
-            # 🛑 STABILIZER
-            # =========================
-            if stabilizer.block(signal, confidence):
-                continue
+                # -------------------------------
+                # EXECUTE (paper trade)
+                # -------------------------------
+                price = features.get("price", 0)
+                size = portfolio.calculate_position_size(confidence)
 
-            # =========================
-            # 🚫 OPTIMIZER
-            # =========================
-            if optimizer.block(signal, confidence, features, open_signals):
-                continue
+                print("\n🚀 EXECUTING TRADE")
+                print(f"{symbol} {action} size={size}")
 
-            if not portfolio.can_open(signal, open_signals):
-                print("🚫 Portfolio limit")
-                continue
+                signal = {
+                    "symbol": symbol,
+                    "signal": action,
+                    "confidence": float(confidence),
+                    "price": float(price),
+                    "features": features,
+                    "result": None,
+                    "profit": None,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "evaluated": False
+                }
 
-            # =========================
-            # 💱 REAL PRICE
-            # =========================
-            price = market.apply(raw_price, signal)
-            print(f"💱 Raw: {raw_price} → Real: {price}")
+                save_signal(signal)
+                print("💾 Signal saved")
 
-            # =========================
-            # 🧬 EVOLVING SIZE
-            # =========================
-            params = evolver.params
-            size = (10 * confidence * params["confidence_boost"]) * params["risk_multiplier"]
+            except Exception as e:
+                print(f"❌ {symbol} error:", e)
+                traceback.print_exc()
 
-            # =========================
-            # 🚀 EXECUTION
-            # =========================
-            print("\n🚀 EXECUTING TRADE")
-            print(symbol, signal, round(size, 2))
+        # -------------------------------
+        # EVALUATION
+        # -------------------------------
+        print("\n🧪 Running evaluation...")
+        evaluate_signals()
 
-            save_signal({
-                "symbol": symbol,
-                "signal": signal,
-                "confidence": confidence,
-                "price": price,
-                "features": features,
-                "timestamp": datetime.now(UTC).isoformat(),
-                "evaluated": False
-            })
+        # -------------------------------
+        # LEARNING
+        # -------------------------------
+        updated_signals = load_all_signals()
+        meta_agent.learn(updated_signals)
 
-            evaluate_signals(symbol)
-
-        except Exception as e:
-            print(f"❌ {symbol} error:", e)
-
-    # =========================
-    # 🧠 LEARNING
-    # =========================
-    try:
-        all_signals = load_all_signals()
-
-        agent.learn(all_signals)
-        stabilizer.update(all_signals)
-        auto_strat.evolve(all_signals)
-
-    except Exception as e:
-        print("❌ Learning error:", e)
-
-    # =========================
-    # 📊 PERFORMANCE
-    # =========================
-    try:
-        all_signals = load_all_signals()
-
-        wins = sum(1 for s in all_signals if s.get("result") == "WIN")
-        losses = sum(1 for s in all_signals if s.get("result") == "LOSS")
-
-        trades = wins + losses
-        winrate = (wins / trades * 100) if trades > 0 else 0
-        profit = sum(s.get("profit", 0) for s in all_signals)
-
-        print("\n📊 PERFORMANCE")
-        print({
-            "trades": trades,
-            "winrate": round(winrate, 2),
-            "profit": round(profit, 4)
-        })
-
-        # =========================
-        # 🧬 EVOLVE SYSTEM
-        # =========================
-        evolver.evolve({
-            "winrate": winrate,
-            "profit": profit
-        })
-
-        agent.dqn.epsilon = evolver.params["exploration"]
+        print("\n=== END PIPELINE ===")
 
     except Exception as e:
-        print("❌ Performance error:", e)
+        print("❌ PIPELINE ERROR:", e)
+        traceback.print_exc()
 
-    print("\n=== END PIPELINE ===\n")
 
+# -------------------------------
+# LOOP (RAILWAY READY)
+# -------------------------------
 
 if __name__ == "__main__":
-    run_pipeline()
+    print("🔥 BOT STARTED")
+
+    while True:
+        try:
+            run_pipeline()
+            time.sleep(300)  # 5 minut
+        except Exception as e:
+            print("❌ CRASH:", e)
+            traceback.print_exc()
+            time.sleep(60)

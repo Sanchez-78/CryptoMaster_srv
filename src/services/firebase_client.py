@@ -1,147 +1,121 @@
 import os
+import json
+from datetime import datetime, timezone
+
 import firebase_admin
-
 from firebase_admin import credentials, firestore
-from google.cloud.firestore_v1.base_query import FieldFilter
 
+db = None
 
-# =========================
-# 🔐 INIT FIREBASE
-# =========================
+# -------------------------------
+# INIT
+# -------------------------------
+
 def init_firebase():
-    if not firebase_admin._apps:
-        cred_path = os.path.join(os.getcwd(), "firebase_key.json")
+    global db
 
-        cred = credentials.Certificate(cred_path)
+    if firebase_admin._apps:
+        db = firestore.client()
+        return
+
+    try:
+        firebase_key = os.getenv("FIREBASE_KEY")
+
+        if not firebase_key:
+            raise Exception("FIREBASE_KEY not found in ENV")
+
+        cred_dict = json.loads(firebase_key)
+        cred = credentials.Certificate(cred_dict)
+
         firebase_admin.initialize_app(cred)
+        db = firestore.client()
 
         print("🔥 Firebase connected")
 
-    return firestore.client()
+    except Exception as e:
+        print("❌ Firebase init error:", e)
+        raise
 
 
-db = init_firebase()
+# -------------------------------
+# SAVE SIGNAL
+# -------------------------------
 
-
-# =========================
-# 💾 SAVE SIGNAL
-# =========================
-def save_signal(data):
+def save_signal(signal: dict):
     try:
-        db.collection("signals").add(data)
-        print("💾 Signal saved")
+        signal["timestamp"] = datetime.now(timezone.utc)
+
+        db.collection("signals").add(signal)
+
     except Exception as e:
         print("❌ Save signal error:", e)
 
 
-# =========================
-# 📥 LOAD OPEN SIGNALS
-# =========================
-def load_open_signals(limit=50):
+# -------------------------------
+# LOAD OPEN SIGNALS
+# -------------------------------
+
+def load_open_signals():
     try:
-        query = (
-            db.collection("signals")
-            .where(filter=FieldFilter("evaluated", "==", False))
-            .limit(limit)
-        )
+        docs = db.collection("signals") \
+            .where("evaluated", "==", False) \
+            .stream()
 
-        docs = query.stream()
-
-        results = []
+        signals = []
         for doc in docs:
-            d = doc.to_dict()
-            d["id"] = doc.id
-            results.append(d)
+            data = doc.to_dict()
+            data["id"] = doc.id
+            signals.append(data)
 
-        print(f"📂 Loaded open signals: {len(results)}")
-        return results
+        print(f"📂 Loaded open signals: {len(signals)}")
+        return signals
 
     except Exception as e:
         print("❌ Load open signals error:", e)
         return []
 
 
-# =========================
-# 📥 LOAD ALL SIGNALS
-# =========================
+# -------------------------------
+# LOAD ALL SIGNALS
+# -------------------------------
+
 def load_all_signals(limit=500):
     try:
-        docs = db.collection("signals").limit(limit).stream()
+        docs = db.collection("signals") \
+            .order_by("timestamp", direction=firestore.Query.DESCENDING) \
+            .limit(limit) \
+            .stream()
 
-        results = []
+        signals = []
         for doc in docs:
-            d = doc.to_dict()
-            d["id"] = doc.id
-            results.append(d)
+            data = doc.to_dict()
+            data["id"] = doc.id
+            signals.append(data)
 
-        print(f"📂 Loaded all signals: {len(results)}")
-        return results
+        return signals
 
     except Exception as e:
         print("❌ Load all signals error:", e)
         return []
 
 
-# =========================
-# 📊 LOAD SIGNALS BY SYMBOL
-# =========================
-def load_signals_by_symbol(symbol, limit=100):
+# -------------------------------
+# UPDATE SIGNAL
+# -------------------------------
+
+def update_signal(signal_id, updates: dict):
     try:
-        query = (
-            db.collection("signals")
-            .where(filter=FieldFilter("symbol", "==", symbol))
-            .limit(limit)
-        )
-
-        docs = query.stream()
-
-        return [doc.to_dict() for doc in docs]
-
-    except Exception as e:
-        print("❌ Load symbol signals error:", e)
-        return []
-
-
-# =========================
-# 🧠 LOAD WEIGHTS
-# =========================
-def load_weights():
-    try:
-        doc = db.collection("config").document("model_weights").get()
-
-        if doc.exists:
-            return doc.to_dict()
-
-        # default fallback
-        return {
-            "rsi": 1.0,
-            "macd": 1.0,
-            "ema": 1.0,
-            "bb": 1.0,
-            "bias": 0.0
-        }
-
-    except Exception as e:
-        print("❌ Load weights error:", e)
-        return {}
-
-
-# =========================
-# 🧠 SAVE WEIGHTS
-# =========================
-def save_weights(weights):
-    try:
-        db.collection("config").document("model_weights").set(weights)
-        print("🧠 Weights updated")
-    except Exception as e:
-        print("❌ Save weights error:", e)
-
-
-# =========================
-# ✅ UPDATE SIGNAL
-# =========================
-def update_signal(doc_id, data):
-    try:
-        db.collection("signals").document(doc_id).update(data)
+        db.collection("signals").document(signal_id).update(updates)
     except Exception as e:
         print("❌ Update signal error:", e)
+
+
+# -------------------------------
+# DELETE (optional)
+# -------------------------------
+
+def delete_signal(signal_id):
+    try:
+        db.collection("signals").document(signal_id).delete()
+    except Exception as e:
+        print("❌ Delete error:", e)
