@@ -11,20 +11,28 @@ def get_candles(symbol="BTCUSDT", interval="15m", limit=100):
             "limit": limit
         }
 
-        response = requests.get(BASE_URL, params=params)
-        data = response.json()
+        r = requests.get(BASE_URL, params=params, timeout=10)
+        data = r.json()
+
+        # ❗ ochrana proti API erroru
+        if not isinstance(data, list):
+            print("❌ Binance error:", data)
+            return []
 
         candles = []
 
         for c in data:
-            candles.append({
-                "time": c[0],
-                "open": float(c[1]),
-                "high": float(c[2]),
-                "low": float(c[3]),
-                "close": float(c[4]),
-                "volume": float(c[5])
-            })
+            try:
+                candles.append({
+                    "time": c[0],
+                    "open": float(c[1]),
+                    "high": float(c[2]),
+                    "low": float(c[3]),
+                    "close": float(c[4]),
+                    "volume": float(c[5])
+                })
+            except Exception:
+                continue  # přeskoč vadný candle
 
         return candles
 
