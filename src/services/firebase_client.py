@@ -119,3 +119,22 @@ def delete_signal(signal_id):
         db.collection("signals").document(signal_id).delete()
     except Exception as e:
         print("❌ Delete error:", e)
+
+# -------------------------------
+# WEIGHTS (META / AI)
+# -------------------------------
+
+def save_weights(weights: dict):
+    try:
+        db.collection("meta").document("weights").set(weights)
+    except Exception as e:
+        print("❌ Save weights error:", e)
+
+
+def load_weights():
+    try:
+        doc = db.collection("meta").document("weights").get()
+        return doc.to_dict() if doc.exists else {}
+    except Exception as e:
+        print("❌ Load weights error:", e)
+        return {}
