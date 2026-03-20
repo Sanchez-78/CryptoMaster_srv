@@ -5,7 +5,6 @@ from datetime import datetime
 from src.services.firebase_client import (
     init_firebase,
     save_signal,
-    load_all_signals,
     load_recent_trades
 )
 
@@ -20,8 +19,6 @@ meta_agent = MetaAgent()
 LEARNING_ONLY = True
 last_prices = {}
 
-
-# ---------------- FEATURES ----------------
 
 def build_features(symbol, price):
     prev_price = last_prices.get(symbol)
@@ -40,8 +37,6 @@ def build_features(symbol, price):
         "volatility": volatility
     }
 
-
-# ---------------- PIPELINE ----------------
 
 def run_pipeline():
     print("\n=== START PIPELINE ===")
@@ -73,7 +68,7 @@ def run_pipeline():
 
                 result = meta_agent.decide(features)
 
-                if not result:
+                if not result or not isinstance(result, tuple):
                     action, confidence = "HOLD", 0.0
                 else:
                     action, confidence = result

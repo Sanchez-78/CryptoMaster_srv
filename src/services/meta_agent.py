@@ -14,6 +14,7 @@ class MetaAgent:
             if not price:
                 return "HOLD", 0.0
 
+            # 🔥 základ logika
             if trend == 1 and change > 0:
                 action = "BUY"
                 confidence = min(0.5 + abs(change) * 5, 0.95)
@@ -24,12 +25,17 @@ class MetaAgent:
 
             else:
                 action = "HOLD"
-                confidence = 0.4
+                confidence = 0.3  # 🔥 sníženo
 
+            # 🔥 volatility boost
             if volatility == 1:
                 confidence += 0.05
 
-            # 🔥 LEARNING BIAS
+            # 🔥 penalizace HOLD
+            if action == "HOLD":
+                confidence -= 0.1
+
+            # 🔥 learning bias
             confidence += self.bias
 
             confidence = max(0.0, min(confidence, 1.0))
@@ -54,10 +60,15 @@ class MetaAgent:
 
         winrate = len(wins) / total
 
-        print(f"🧠 Learning | winrate={round(winrate,2)}")
+        # 🔥 AVG PROFIT
+        profits = [t.get("profit", 0) for t in trades if t.get("profit") is not None]
+        avg_profit = sum(profits) / len(profits) if profits else 0
 
-        # 🔥 adaptace
-        if winrate < 0.5:
-            self.bias = -0.05
-        else:
-            self.bias = 0.05
+        # 🔥 STRONG LEARNING
+        self.bias = (winrate - 0.5) * 0.5
+        self.bias += avg_profit * 2
+
+        # clamp
+        self.bias = max(-0.3, min(self.bias, 0.3))
+
+        print(f"🧠 Learning | winrate={round(winrate,2)} bias={round(self.bias,3)}")
