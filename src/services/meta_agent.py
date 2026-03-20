@@ -1,7 +1,13 @@
+from src.services.fx_service import get_usd_to_czk
+
+
 class MetaAgent:
     def __init__(self):
         self.bias = 0.0
         self.patterns = {}
+
+        self.usd_to_czk = 23.0  # fallback
+        self.account_size = 1000  # USD (simulace kapitálu)
 
         self.last_stats = {
             "winrate": 0,
@@ -9,7 +15,7 @@ class MetaAgent:
             "patterns": 0
         }
 
-        print("🧠 MetaAgent ready (ultimate version)")
+        print("🧠 MetaAgent ready (ultimate + fx + dashboard)")
 
     # ---------------- DECISION ----------------
     def decide(self, features):
@@ -61,6 +67,9 @@ class MetaAgent:
     def learn_from_history(self, trades):
         if not trades:
             return
+
+        # 🔥 LIVE FX
+        self.usd_to_czk = get_usd_to_czk()
 
         wins = [t for t in trades if t.get("result") == "WIN"]
         losses = [t for t in trades if t.get("result") == "LOSS"]
@@ -192,6 +201,12 @@ class MetaAgent:
         avg_win = sum([t.get("profit", 0) for t in wins]) / len(wins) if wins else 0
         avg_loss = sum([t.get("profit", 0) for t in losses]) / len(losses) if losses else 0
 
+        # 🔥 CZK přepočet
+        total_czk = total_profit * self.account_size * self.usd_to_czk
+        avg_win_czk = avg_win * self.account_size * self.usd_to_czk
+        avg_loss_czk = avg_loss * self.account_size * self.usd_to_czk
+
+        # 🔥 streaky
         best_streak = 0
         worst_streak = 0
         cw = cl = 0
@@ -207,6 +222,7 @@ class MetaAgent:
             best_streak = max(best_streak, cw)
             worst_streak = max(worst_streak, cl)
 
+        # 🔥 status
         if winrate > 0.6:
             status = "VYDĚLÁVÁ 🟢"
         elif winrate > 0.45:
@@ -220,14 +236,15 @@ class MetaAgent:
         print(f"Zisky: {len(wins)}")
         print(f"Ztráty: {len(losses)}")
 
-        print(f"\n💰 Celkový profit: {round(total_profit,4)}")
-        print(f"📈 Průměrný zisk: {round(avg_win,4)}")
-        print(f"📉 Průměrná ztráta: {round(avg_loss,4)}")
+        print(f"\n💰 Celkový profit: {round(total_profit,4)} (≈ {int(total_czk)} Kč)")
+        print(f"📈 Průměrný zisk: {round(avg_win,4)} (≈ {int(avg_win_czk)} Kč)")
+        print(f"📉 Průměrná ztráta: {round(avg_loss,4)} (≈ {int(avg_loss_czk)} Kč)")
 
         print(f"\n🔥 Nejlepší série: {best_streak}")
         print(f"💀 Nejhorší série: {worst_streak}")
 
-        print(f"\n📊 Stav: {status}")
+        print(f"\n💱 USD/CZK: {round(self.usd_to_czk,2)}")
+        print(f"📊 Stav: {status}")
 
     # ---------------- COLOR SCORE ----------------
     def color_score(self, score):
