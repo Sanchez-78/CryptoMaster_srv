@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Desktop_Commander__list_directory",
+      "Bash(wc -l /c/Projects/CryptoMaster_srv/src/services/*.py)"
+    ]
+  }
+}

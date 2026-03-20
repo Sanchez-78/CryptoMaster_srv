@@ -11,10 +11,13 @@ from src.services.firebase_client import (
 from src.services.market_data import get_all_prices
 from src.services.meta_agent import MetaAgent
 from src.services.evaluator import evaluate_signals
+from src.services.trade_filter import TradeFilter
 
 
 symbols = ["BTCUSDT", "ETHUSDT", "ADAUSDT"]
+
 meta_agent = MetaAgent()
+trade_filter = TradeFilter()
 
 last_prices = {}
 
@@ -61,7 +64,10 @@ def run_pipeline():
     init_firebase()
 
     try:
-        # 🔥 LEARNING
+        # 🔥 reset trade limiter
+        trade_filter.reset()
+
+        # 🔥 learning
         trades = load_recent_trades(100)
         meta_agent.learn_from_history(trades)
 
@@ -86,12 +92,25 @@ def run_pipeline():
                 result = meta_agent.decide(features)
 
                 if not result or not isinstance(result, tuple):
+                    print("⚠️ MetaAgent invalid:", result)
                     action, confidence = "HOLD", 0.0
                 else:
                     action, confidence = result
 
                 print(f"{symbol} | {action} | {confidence:.2f}")
 
+                # 🔥 FILTER
+                allowed, reason = trade_filter.allow_trade(
+                    action, confidence, features
+                )
+
+                if not allowed:
+                    print(f"{symbol} ❌ FILTERED: {reason}")
+                    continue
+
+                trade_filter.register_trade()
+
+                # 🔥 SIGNAL
                 signal = {
                     "symbol": symbol,
                     "signal": action,
@@ -121,6 +140,8 @@ def run_pipeline():
         print("❌ PIPELINE ERROR:", e)
         traceback.print_exc()
 
+
+# ---------------- LOOP ----------------
 
 if __name__ == "__main__":
     print("🔥 BOT STARTED")

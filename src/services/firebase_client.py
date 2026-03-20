@@ -242,3 +242,68 @@ def load_meta_state():
     except Exception as e:
         print("❌ Load meta error:", e)
         return {}
+
+
+# ---------------- WEIGHTS ----------------
+
+def load_weights() -> dict:
+    try:
+        db = get_db()
+        if not db:
+            return {}
+
+        doc = db.collection("meta").document("weights").get()
+        return doc.to_dict() if doc.exists else {}
+
+    except Exception as e:
+        print("❌ Load weights error:", e)
+        return {}
+
+
+def save_weights(weights: dict) -> None:
+    try:
+        db = get_db()
+        if not db:
+            return
+
+        db.collection("meta").document("weights").set(weights)
+
+    except Exception as e:
+        print("❌ Save weights error:", e)
+
+
+# ---------------- PENDING SIGNALS (pro evaluator) ----------------
+
+def load_pending_signals() -> list[dict]:
+    """Vrátí signály, které ještě nebyly vyhodnoceny."""
+    try:
+        db = get_db()
+        if not db:
+            return []
+
+        docs = db.collection("signals") \
+            .where(filter=FieldFilter("evaluated", "==", False)) \
+            .stream()
+
+        return [{"id": d.id, **d.to_dict()} for d in docs]
+
+    except Exception as e:
+        print("❌ Load pending signals error:", e)
+        return []
+
+
+def mark_signal_evaluated(doc_id: str, update: dict) -> None:
+    """Označí signál jako vyhodnocený a uloží výsledek."""
+    try:
+        db = get_db()
+        if not db:
+            return
+
+        db.collection("signals").document(doc_id).update({
+            "evaluated":    True,
+            "evaluated_at": __import__("datetime").datetime.utcnow().isoformat(),
+            **update,
+        })
+
+    except Exception as e:
+        print("❌ Mark evaluated error:", e)
