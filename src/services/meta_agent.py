@@ -3,14 +3,13 @@ class MetaAgent:
         self.bias = 0.0
         self.patterns = {}
 
-        # 🔥 progress tracking
         self.last_stats = {
             "winrate": 0,
             "avg_profit": 0,
             "patterns": 0
         }
 
-        print("🧠 MetaAgent ready (multi-tf + pattern + reward + progress)")
+        print("🧠 MetaAgent ready (ultimate version)")
 
     # ---------------- DECISION ----------------
     def decide(self, features):
@@ -19,7 +18,6 @@ class MetaAgent:
             if not price:
                 return "HOLD", 0.0
 
-            # 🔥 SAFE TF LOAD
             m15 = features.get("m15_trend", 0)
             h1 = features.get("h1_trend", 0)
             h4 = features.get("h4_trend", 0)
@@ -28,7 +26,6 @@ class MetaAgent:
             h1_vol = features.get("h1_volatility", 0)
             h4_vol = features.get("h4_volatility", 0)
 
-            # ---------------- TREND CONSENSUS ----------------
             trend_score = m15 + h1 + h4
 
             if trend_score >= 2:
@@ -41,22 +38,17 @@ class MetaAgent:
                 action = "HOLD"
                 confidence = 0.3
 
-            # ---------------- VOLATILITY ----------------
             vol_score = m15_vol + h1_vol + h4_vol
             confidence += vol_score * 0.05
 
-            # ---------------- PATTERN BOOST ----------------
             key = f"{trend_score}_{vol_score}_{action}"
             if key in self.patterns:
                 confidence += self.patterns[key]
 
-            # ---------------- HOLD PENALTY ----------------
             if action == "HOLD":
                 confidence -= 0.1
 
-            # ---------------- GLOBAL BIAS ----------------
             confidence += self.bias
-
             confidence = max(0.0, min(confidence, 1.0))
 
             return action, confidence
@@ -82,10 +74,10 @@ class MetaAgent:
         profits = [t.get("profit", 0) for t in trades if t.get("profit") is not None]
         avg_profit = sum(profits) / len(profits) if profits else 0
 
-        # 🔥 GLOBAL LEARNING
-        self.bias = (winrate - 0.5) * 0.5
-        self.bias += avg_profit * 2
-        self.bias = max(-0.3, min(self.bias, 0.3))
+        # 🔥 GLOBAL BIAS
+        self.bias = (winrate - 0.5) * 0.6
+        self.bias += avg_profit * 3
+        self.bias = max(-0.4, min(self.bias, 0.4))
 
         # ---------------- PATTERN LEARNING ----------------
         for t in trades:
@@ -99,7 +91,6 @@ class MetaAgent:
             if result not in ["WIN", "LOSS"]:
                 continue
 
-            # 🔥 SAFE LOAD
             m15 = features.get("m15_trend", 0)
             h1 = features.get("h1_trend", 0)
             h4 = features.get("h4_trend", 0)
@@ -116,15 +107,30 @@ class MetaAgent:
             if key not in self.patterns:
                 self.patterns[key] = 0.0
 
-            # 🔥 PROFIT-BASED LEARNING
+            # 🔥 SMART REWARD
             profit = t.get("profit", 0)
+            confidence = t.get("confidence", 0.5)
 
-            if result == "WIN":
-                self.patterns[key] += 0.02 + profit * 2
+            if action == "BUY":
+                aligned = trend_score > 0
+            elif action == "SELL":
+                aligned = trend_score < 0
             else:
-                self.patterns[key] -= 0.02 + abs(profit) * 2
+                aligned = False
 
-            self.patterns[key] = max(-0.3, min(self.patterns[key], 0.3))
+            trend_bonus = 0.02 if aligned else -0.02
+            vol_quality = 0.01 if vol >= 2 else -0.01
+            conf_bonus = (confidence - 0.5) * 0.05
+
+            reward = (
+                profit * 3 +
+                trend_bonus +
+                vol_quality +
+                conf_bonus
+            )
+
+            self.patterns[key] += reward
+            self.patterns[key] = max(-0.5, min(self.patterns[key], 0.5))
 
         print(
             f"🧠 Learning | winrate={round(winrate,2)} "
@@ -132,8 +138,8 @@ class MetaAgent:
             f"patterns={len(self.patterns)}"
         )
 
-        # 🔥 PROGRESS OUTPUT
         self.print_progress(winrate, avg_profit)
+        self.print_user_summary(trades)
 
     # ---------------- PROGRESS ----------------
     def print_progress(self, winrate, avg_profit):
@@ -146,7 +152,6 @@ class MetaAgent:
                 return "↓"
             return "="
 
-        # 🔥 SCORE
         score = (
             winrate * 50 +
             max(min(avg_profit * 1000, 25), -25) +
@@ -170,16 +175,70 @@ class MetaAgent:
             "patterns": len(self.patterns)
         }
 
+    # ---------------- USER DASHBOARD ----------------
+    def print_user_summary(self, trades):
+        wins = [t for t in trades if t.get("result") == "WIN"]
+        losses = [t for t in trades if t.get("result") == "LOSS"]
+
+        total = len(wins) + len(losses)
+        if total == 0:
+            return
+
+        winrate = len(wins) / total
+
+        profits = [t.get("profit", 0) for t in trades]
+        total_profit = sum(profits)
+
+        avg_win = sum([t.get("profit", 0) for t in wins]) / len(wins) if wins else 0
+        avg_loss = sum([t.get("profit", 0) for t in losses]) / len(losses) if losses else 0
+
+        best_streak = 0
+        worst_streak = 0
+        cw = cl = 0
+
+        for t in trades:
+            if t.get("result") == "WIN":
+                cw += 1
+                cl = 0
+            elif t.get("result") == "LOSS":
+                cl += 1
+                cw = 0
+
+            best_streak = max(best_streak, cw)
+            worst_streak = max(worst_streak, cl)
+
+        if winrate > 0.6:
+            status = "VYDĚLÁVÁ 🟢"
+        elif winrate > 0.45:
+            status = "ZLEPŠUJE SE 🟡"
+        else:
+            status = "SLABÝ 🔴"
+
+        print("\n🤖 STAV ROBOTA:")
+        print(f"Celkem obchodů: {total}")
+        print(f"Úspěšnost: {round(winrate * 100, 1)}%")
+        print(f"Zisky: {len(wins)}")
+        print(f"Ztráty: {len(losses)}")
+
+        print(f"\n💰 Celkový profit: {round(total_profit,4)}")
+        print(f"📈 Průměrný zisk: {round(avg_win,4)}")
+        print(f"📉 Průměrná ztráta: {round(avg_loss,4)}")
+
+        print(f"\n🔥 Nejlepší série: {best_streak}")
+        print(f"💀 Nejhorší série: {worst_streak}")
+
+        print(f"\n📊 Stav: {status}")
+
     # ---------------- COLOR SCORE ----------------
     def color_score(self, score):
         if score < 30:
-            return f"\033[91m{score}\033[0m"  # red
+            return f"\033[91m{score}\033[0m"
         elif score < 50:
-            return f"\033[93m{score}\033[0m"  # yellow
+            return f"\033[93m{score}\033[0m"
         elif score < 70:
-            return f"\033[94m{score}\033[0m"  # blue
+            return f"\033[94m{score}\033[0m"
         else:
-            return f"\033[92m{score}\033[0m"  # green
+            return f"\033[92m{score}\033[0m"
 
     # ---------------- PROGRESS BAR ----------------
     def progress_bar(self, score):
@@ -187,13 +246,13 @@ class MetaAgent:
         filled = int(score / 100 * total)
 
         if score < 30:
-            color = "\033[91m"  # red
+            color = "\033[91m"
         elif score < 50:
-            color = "\033[93m"  # yellow
+            color = "\033[93m"
         elif score < 70:
-            color = "\033[94m"  # blue
+            color = "\033[94m"
         else:
-            color = "\033[92m"  # green
+            color = "\033[92m"
 
         reset = "\033[0m"
 
