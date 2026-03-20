@@ -1,10 +1,18 @@
 import requests
+import time
+
+_cache = None
+_last_fetch = 0
+CACHE_TTL = 30  # seconds
 
 
 def get_all_prices():
-    # -------------------------------
-    # 1️⃣ COINGECKO
-    # -------------------------------
+    global _cache, _last_fetch
+
+    # ✅ CACHE
+    if _cache and time.time() - _last_fetch < CACHE_TTL:
+        return _cache
+
     try:
         url = "https://api.coingecko.com/api/v3/simple/price"
         params = {
@@ -12,50 +20,31 @@ def get_all_prices():
             "vs_currencies": "usd"
         }
 
-        r = requests.get(url, params=params, timeout=10)
+        r = requests.get(url, params=params, timeout=5)
 
         if r.status_code == 200:
             data = r.json()
 
-            return {
+            _cache = {
                 "BTCUSDT": float(data["bitcoin"]["usd"]),
                 "ETHUSDT": float(data["ethereum"]["usd"]),
                 "ADAUSDT": float(data["cardano"]["usd"])
             }
 
-        print("⚠️ CoinGecko failed:", r.status_code)
+            _last_fetch = time.time()
+            return _cache
+
+        if r.status_code == 429:
+            print("⚠️ Rate limit, backing off...")
+            time.sleep(2)
 
     except Exception as e:
-        print("⚠️ CoinGecko error:", e)
+        print("⚠️ Market data error:", e)
 
-    # -------------------------------
-    # 2️⃣ COINPAPRIKA (FALLBACK)
-    # -------------------------------
-    try:
-        mapping = {
-            "BTCUSDT": "btc-bitcoin",
-            "ETHUSDT": "eth-ethereum",
-            "ADAUSDT": "ada-cardano"
-        }
+    # fallback cache
+    if _cache:
+        print("⚠️ Using cached prices")
+        return _cache
 
-        prices = {}
-
-        for sym, coin_id in mapping.items():
-            url = f"https://api.coinpaprika.com/v1/tickers/{coin_id}"
-            r = requests.get(url, timeout=10)
-
-            if r.status_code == 200:
-                data = r.json()
-                prices[sym] = float(data["quotes"]["USD"]["price"])
-
-        if prices:
-            return prices
-
-    except Exception as e:
-        print("⚠️ CoinPaprika error:", e)
-
-    # -------------------------------
-    # FAIL
-    # -------------------------------
-    print("❌ All price sources failed")
+    print("❌ No prices available")
     return {}

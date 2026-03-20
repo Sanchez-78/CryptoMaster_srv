@@ -13,27 +13,46 @@ from src.services.market_data import get_all_prices
 from src.services.meta_agent import MetaAgent
 from src.services.evaluator import evaluate_signals
 
-# -------------------------------
-# CONFIG
-# -------------------------------
 
 symbols = ["BTCUSDT", "ETHUSDT", "ADAUSDT"]
 meta_agent = MetaAgent()
 
-MIN_CONFIDENCE = 0.55
 MAX_OPEN_TRADES = 5
+MAX_DAILY_DRAWDOWN = -0.03
+
+last_prices = {}
+
+
+# -------------------------------
+# DYNAMIC CONFIDENCE
+# -------------------------------
+
+def dynamic_confidence_threshold(signals):
+    if len(signals) < 50:
+        return 0.55
+    if len(signals) < 200:
+        return 0.6
+    return 0.65
+
+
+# -------------------------------
+# POSITION SIZING
+# -------------------------------
+
+def compute_position_size(confidence):
+    return round(1.0 * confidence, 3)
 
 
 # -------------------------------
 # RISK MANAGEMENT
 # -------------------------------
 
-def should_trade(action, confidence, open_trades):
+def should_trade(action, confidence, open_trades, features):
     if action == "HOLD":
         return False
 
-    if confidence < MIN_CONFIDENCE:
-        print("🚫 Low confidence")
+    if features["volatility"] == 0:
+        print("🚫 Low volatility")
         return False
 
     if len(open_trades) >= MAX_OPEN_TRADES:
@@ -44,20 +63,46 @@ def should_trade(action, confidence, open_trades):
 
 
 def bootstrap_mode(total_signals):
-    return total_signals < 30
+    return total_signals < 50
 
 
 # -------------------------------
-# FEATURE BUILDER (fallback)
+# FEATURES
 # -------------------------------
 
-def build_features(price):
+def build_features(symbol, price):
+    prev_price = last_prices.get(symbol)
+
+    change = 0 if not prev_price else (price - prev_price) / prev_price
+
+    trend = 1 if change > 0 else -1
+    volatility = 1 if abs(change) > 0.01 else 0
+
+    last_prices[symbol] = price
+
     return {
         "price": price,
-        "trend": "BULL",
-        "volatility": "NORMAL",
-        "regime": "SIMPLIFIED"
+        "change": change,
+        "trend": trend,
+        "volatility": volatility
     }
+
+
+# -------------------------------
+# KILL SWITCH
+# -------------------------------
+
+def check_kill_switch(signals):
+    total = 0
+    for s in signals:
+        if s.get("evaluated") and s.get("profit"):
+            total += s["profit"]
+
+    if total < MAX_DAILY_DRAWDOWN:
+        print("🛑 KILL SWITCH ACTIVE")
+        return True
+
+    return False
 
 
 # -------------------------------
@@ -67,111 +112,84 @@ def build_features(price):
 def run_pipeline():
     print("\n=== START PIPELINE ===")
 
-    # 🔥 Firebase init vždy
     init_firebase()
 
     try:
         all_signals = load_all_signals()
         open_signals = load_open_signals()
 
-        print(f"📂 Loaded all signals: {len(all_signals)}")
-        print(f"📂 Open trades: {len(open_signals)}")
+        if check_kill_switch(all_signals):
+            return
 
-        # 🔥 JEDEN REQUEST (fix 429)
+        MIN_CONFIDENCE = dynamic_confidence_threshold(all_signals)
+
+        print(f"📂 Signals: {len(all_signals)} | Open: {len(open_signals)}")
+
         prices = get_all_prices()
 
         if not prices:
-            print("❌ No prices from API")
+            print("❌ No prices")
             return
 
         for symbol in symbols:
-            print(f"\n🔍 {symbol}")
-
             try:
                 price = prices.get(symbol)
-
                 if not price:
-                    print("⚠️ No price data")
                     continue
 
-                features = build_features(price)
-
-                print("DEBUG FEATURES:", features)
-
-                # -------------------------------
-                # DECISION
-                # -------------------------------
+                features = build_features(symbol, price)
 
                 action, confidence = meta_agent.decide(features)
 
-                print(f"🤖 FINAL: {action} ({confidence})")
+                # 🔥 trend boost
+                if features["trend"] == 1:
+                    confidence += 0.05
 
-                # -------------------------------
-                # BOOTSTRAP / FILTER
-                # -------------------------------
+                print(f"{symbol} | {action} | conf={confidence:.2f}")
 
-                if bootstrap_mode(len(all_signals)):
-                    print("🚀 Bootstrap mode → allowing trade")
-                    allow = True
-                else:
-                    allow = should_trade(action, confidence, open_signals)
+                if not bootstrap_mode(len(all_signals)):
+                    if confidence < MIN_CONFIDENCE:
+                        print("🚫 Low confidence")
+                        continue
 
-                if not allow:
-                    continue
-
-                # -------------------------------
-                # SAVE SIGNAL
-                # -------------------------------
+                    if not should_trade(action, confidence, open_signals, features):
+                        continue
 
                 signal = {
                     "symbol": symbol,
                     "signal": action,
                     "confidence": float(confidence),
+                    "size": compute_position_size(confidence),
                     "price": float(price),
                     "features": features,
                     "result": None,
                     "profit": None,
+                    "age": 0,
                     "timestamp": datetime.utcnow().isoformat(),
                     "evaluated": False
                 }
 
-                print("\n🚀 EXECUTING TRADE")
-                print(f"{symbol} {action} @ {price}")
+                print(f"🚀 {symbol} {action} @ {price}")
 
                 save_signal(signal)
-
-                print("💾 Signal saved")
 
             except Exception as e:
                 print(f"❌ {symbol} error:", e)
                 traceback.print_exc()
 
-        # -------------------------------
-        # EVALUATION
-        # -------------------------------
-
-        print("\n🧪 Running evaluation...")
+        print("\n🧪 Evaluating...")
 
         for symbol in symbols:
-            try:
-                evaluate_signals(symbol)
-            except Exception as e:
-                print(f"❌ Eval error {symbol}:", e)
-
-        print("\n=== END PIPELINE ===")
+            evaluate_signals(symbol)
 
     except Exception as e:
         print("❌ PIPELINE ERROR:", e)
         traceback.print_exc()
 
 
-# -------------------------------
-# LOOP
-# -------------------------------
-
 if __name__ == "__main__":
     print("🔥 BOT STARTED")
 
     while True:
         run_pipeline()
-        time.sleep(600)
+        time.sleep(60)
