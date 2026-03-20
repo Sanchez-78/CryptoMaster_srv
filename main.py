@@ -17,38 +17,12 @@ from src.services.evaluator import evaluate_signals
 symbols = ["BTCUSDT", "ETHUSDT", "ADAUSDT"]
 meta_agent = MetaAgent()
 
-LEARNING_ONLY = True  # 🔥 KLÍČOVÉ
-
-MAX_OPEN_TRADES = 5
+LEARNING_ONLY = True
 MAX_DAILY_DRAWDOWN = -0.05
 
 last_prices = {}
 kill_switch_active_until = 0
 
-
-# -------------------------------
-# CONFIDENCE
-# -------------------------------
-
-def dynamic_confidence_threshold(signals):
-    if len(signals) < 50:
-        return 0.55
-    if len(signals) < 200:
-        return 0.6
-    return 0.65
-
-
-# -------------------------------
-# POSITION SIZE
-# -------------------------------
-
-def compute_position_size(confidence):
-    return round(confidence, 3)
-
-
-# -------------------------------
-# FEATURES
-# -------------------------------
 
 def build_features(symbol, price):
     prev_price = last_prices.get(symbol)
@@ -68,10 +42,6 @@ def build_features(symbol, price):
     }
 
 
-# -------------------------------
-# KILL SWITCH (rolling window)
-# -------------------------------
-
 def check_kill_switch(signals):
     global kill_switch_active_until
 
@@ -90,15 +60,11 @@ def check_kill_switch(signals):
 
     if total < -0.05:
         kill_switch_active_until = time.time() + 3600
-        print(f"🛑 KILL SWITCH ACTIVE | recent pnl={round(total,4)}")
+        print(f"🛑 KILL SWITCH ACTIVE | pnl={round(total,4)}")
         return True
 
     return False
 
-
-# -------------------------------
-# PIPELINE
-# -------------------------------
 
 def run_pipeline():
     print("\n=== START PIPELINE ===")
@@ -107,11 +73,7 @@ def run_pipeline():
 
     try:
         all_signals = load_all_signals()
-        open_signals = load_open_signals()
-
         kill = check_kill_switch(all_signals)
-
-        MIN_CONFIDENCE = dynamic_confidence_threshold(all_signals)
 
         prices = get_all_prices()
         if not prices:
@@ -126,19 +88,21 @@ def run_pipeline():
 
                 features = build_features(symbol, price)
 
-                action, confidence = meta_agent.decide(features)
+                # 🔥 SAFE CALL
+                result = meta_agent.decide(features)
 
-                if features["trend"] == 1:
-                    confidence += 0.05
+                if not result or not isinstance(result, tuple):
+                    print("⚠️ MetaAgent invalid:", result)
+                    action, confidence = "HOLD", 0.0
+                else:
+                    action, confidence = result
 
-                print(f"{symbol} | {action} | conf={confidence:.2f}")
+                print(f"{symbol} | {action} | {confidence:.2f}")
 
-                # 🔥 ALWAYS CREATE SIGNAL (learning)
                 signal = {
                     "symbol": symbol,
                     "signal": action,
                     "confidence": float(confidence),
-                    "size": compute_position_size(confidence),
                     "price": float(price),
                     "features": features,
                     "result": None,
@@ -149,17 +113,14 @@ def run_pipeline():
                     "mode": "learning"
                 }
 
-                # 🔥 LEARNING MODE
+                # 🔥 LEARNING ONLY
                 if LEARNING_ONLY:
                     save_signal(signal)
                     continue
 
-                # 🔥 TRADING MODE (disabled now)
-                if not kill:
-                    if confidence < MIN_CONFIDENCE:
-                        continue
-
-                    save_signal(signal)
+                # trading vypnutý pokud kill switch
+                if kill:
+                    continue
 
             except Exception as e:
                 print(f"❌ {symbol} error:", e)
