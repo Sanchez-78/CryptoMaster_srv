@@ -11,7 +11,7 @@ def evaluate_signals(symbol):
 
         docs = db.collection("signals") \
             .where("symbol", "==", symbol) \
-            .where("evaluated", "==", False) \
+            .where(filter=("evaluated", "==", False)) \
             .stream()
 
         signals = [(d.id, d.to_dict()) for d in docs]
