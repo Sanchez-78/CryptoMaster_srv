@@ -16,26 +16,46 @@ from src.services.trade_filter import TradeFilter
 # ─── KONFIG ────────────────────────────────────────────────────────────────
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "ADAUSDT", "SOLUSDT", "XRPUSDT"]
 LEARNING_MODE = True
-LOOP_DELAY = 10  # 🔥 rychlejší learning
+LOOP_DELAY = 10
 
 agent = MetaAgent()
 trade_filter = TradeFilter()
 last_prices = {}
 
-# 🔥 MARKET TREND (klíčové pro learning)
-market_bias = 0
+# 🔥 MARKET REŽIMY
+market_regime = "RANGE"
+regime_timer = 0
 
 
-# ─── SIMULACE (REALISTIČTĚJŠÍ) ─────────────────────────────────────────────
+# ─── SIMULATION++ (REAL MARKET BEHAVIOR) ────────────────────────────────────
 def simulate_trade(action: str, price: float) -> float:
-    global market_bias
+    global market_regime, regime_timer
 
-    # pomalu se měnící trend
-    market_bias += random.uniform(-0.0005, 0.0005)
-    market_bias = max(-0.003, min(0.003, market_bias))
+    regime_timer += 1
 
-    noise = random.uniform(-0.002, 0.002)
-    future = price * (1 + market_bias + noise)
+    # změna režimu
+    if regime_timer > 50:
+        regime_timer = 0
+        market_regime = random.choice(["BULL", "BEAR", "RANGE", "VOLATILE"])
+        print(f"🌍 MARKET REGIME → {market_regime}")
+
+    if market_regime == "BULL":
+        drift = 0.001
+        noise = random.uniform(-0.001, 0.002)
+
+    elif market_regime == "BEAR":
+        drift = -0.001
+        noise = random.uniform(-0.002, 0.001)
+
+    elif market_regime == "VOLATILE":
+        drift = random.uniform(-0.001, 0.001)
+        noise = random.uniform(-0.004, 0.004)
+
+    else:  # RANGE
+        drift = 0
+        noise = random.uniform(-0.002, 0.002)
+
+    future = price * (1 + drift + noise)
 
     if action == "BUY":
         return (future - price) / price
@@ -44,7 +64,7 @@ def simulate_trade(action: str, price: float) -> float:
     return 0.0
 
 
-# ─── FEATURE ENGINE (REAL HISTORY) ─────────────────────────────────────────
+# ─── FEATURE ENGINE (HISTORY BASED) ────────────────────────────────────────
 def build_features(symbol: str, price: float) -> dict:
     prev = last_prices.get(symbol, {"history": []})
     history = prev.get("history", [])
@@ -77,13 +97,16 @@ def build_features(symbol: str, price: float) -> dict:
         "m15_volatility": volatility(3),
         "h1_volatility": volatility(6),
         "h4_volatility": volatility(12),
+
+        # 🔥 BONUS → AI ví v jakém trhu je
+        "market_regime": market_regime,
     }
 
     last_prices[symbol] = prev
     return feats
 
 
-# ─── SAVE META ─────────────────────────────────────────────────────────────
+# ─── META SAVE ─────────────────────────────────────────────────────────────
 def _save_meta(trades: list) -> None:
     try:
         wins = [t for t in trades if t.get("result") == "WIN"]
@@ -97,9 +120,6 @@ def _save_meta(trades: list) -> None:
 
         profits = [t.get("profit", 0) for t in trades if t.get("profit") is not None]
         avg_profit = sum(profits) / len(profits) if profits else 0
-
-        avg_win = sum(t.get("profit", 0) for t in wins) / len(wins) if wins else 0
-        avg_loss = sum(t.get("profit", 0) for t in losses) / len(losses) if losses else 0
 
         score = int(max(0, min(
             winrate * 50 +
@@ -123,16 +143,14 @@ def _save_meta(trades: list) -> None:
             "wins": len(wins),
             "losses": len(losses),
             "avg_profit": round(avg_profit, 5),
-            "avg_win": round(avg_win, 5),
-            "avg_loss": round(avg_loss, 5),
             "total_profit": round(sum(profits), 5),
-            "patterns":   len(agent.patterns),
-            "bias":       round(agent.bias, 4),
-            "fx_usd_czk": round(agent.usd_to_czk, 2),
+            "patterns": len(agent.patterns),
+            "bias": round(agent.bias, 4),
+            "regime": market_regime,
             "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         })
 
-        print(f"📊 META | score={score} status={status}")
+        print(f"📊 META | score={score} status={status} regime={market_regime}")
 
     except Exception as e:
         print("❌ META ERROR:", e)
@@ -164,6 +182,7 @@ def run_pipeline():
             features = build_features(symbol, price)
             action, confidence = agent.decide(features)
 
+            # 🔥 filter vypnutý v learning mode
             if not LEARNING_MODE:
                 allowed, reason = trade_filter.allow_trade(action, confidence, features)
                 if not allowed:
@@ -193,8 +212,9 @@ def run_pipeline():
             print(f"❌ {symbol}:", e)
             traceback.print_exc()
 
-    # 🔥 LOAD VÍCE DAT
+    # 🔥 LEARNING
     trades = load_recent_trades(1000)
+
     print(f"\n📦 Trades: {len(trades)}")
     print(f"🧠 Patterns: {len(agent.patterns)}")
 
@@ -206,7 +226,7 @@ def run_pipeline():
 
 # ─── MAIN LOOP ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("🔥 BOT STARTED (REAL LEARNING MODE)")
+    print("🔥 BOT STARTED (SIMULATION++)")
 
     while True:
         try:
