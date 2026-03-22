@@ -1,89 +1,74 @@
 import math
 
-
 class FeatureEngine:
     def __init__(self):
-        self.history = {}  # symbol -> price history
+        self.history = {}
 
-    # ---------------- UPDATE HISTORY ----------------
-    def update(self, symbol: str, price: float):
+    def update(self, symbol, price):
         if symbol not in self.history:
             self.history[symbol] = []
+        self.history[symbol].append(price)
 
-        h = self.history[symbol]
-        h.append(price)
+        if len(self.history[symbol]) > 100:
+            self.history[symbol].pop(0)
 
-        if len(h) > 100:
-            h.pop(0)
-
-    # ---------------- HELPERS ----------------
     def _returns(self, h, n):
         if len(h) < n + 1:
             return 0.0
         return (h[-1] - h[-n]) / h[-n]
 
-    def _log_return(self, h):
-        if len(h) < 2:
-            return 0.0
-        return math.log(h[-1] / h[-2])
-
     def _ema(self, h, period):
         if len(h) < period:
-            return h[-1] if h else 0
-
+            return h[-1]
         k = 2 / (period + 1)
         ema = h[-period]
-
-        for price in h[-period:]:
-            ema = price * k + ema * (1 - k)
-
+        for p in h[-period:]:
+            ema = p * k + ema * (1 - k)
         return ema
 
     def _std(self, h, n):
         if len(h) < n:
             return 0.0
+        w = h[-n:]
+        m = sum(w) / n
+        return (sum((x - m) ** 2 for x in w) / n) ** 0.5
 
-        window = h[-n:]
-        mean = sum(window) / n
-        var = sum((x - mean) ** 2 for x in window) / n
-
-        return math.sqrt(var)
-
-    # ---------------- MAIN FEATURES ----------------
-    def build(self, symbol: str) -> dict:
+    def build(self, symbol):
         h = self.history.get(symbol, [])
 
-        if len(h) < 10:
-            return {"price": h[-1] if h else 0}
+        if not h:
+            return {"price": 0}
 
         price = h[-1]
 
-        # 🔥 RETURNS
+        # 🔥 FIX: vždy vrací plný feature set
+        if len(h) < 10:
+            return {
+                "price": price,
+                "r1": 0, "r3": 0, "r5": 0,
+                "ema_fast": price, "ema_mid": price, "ema_slow": price,
+                "trend_strength": 0,
+                "vol_5": 0, "vol_10": 0,
+                "momentum": 0,
+                "market_regime": "RANGE"
+            }
+
         r1 = self._returns(h, 1)
         r3 = self._returns(h, 3)
         r5 = self._returns(h, 5)
 
-        log_r = self._log_return(h)
-
-        # 🔥 EMA TREND
         ema_fast = self._ema(h, 5)
         ema_mid = self._ema(h, 10)
         ema_slow = self._ema(h, 20)
 
         trend_strength = (ema_fast - ema_slow) / price
 
-        # 🔥 VOLATILITY
         vol_5 = self._std(h, 5) / price
         vol_10 = self._std(h, 10) / price
 
-        # 🔥 MOMENTUM
         momentum = r3 + r5
 
-        # 🔥 DIRECTION FLAGS
-        trend_dir = 1 if trend_strength > 0 else -1
-        momentum_dir = 1 if momentum > 0 else -1
-
-        # 🔥 REGIME DETECTION (REAL)
+        # 🔥 REAL REGIME
         if trend_strength > 0.002:
             regime = "BULL"
         elif trend_strength < -0.002:
@@ -95,28 +80,13 @@ class FeatureEngine:
 
         return {
             "price": price,
-
-            # returns
-            "r1": r1,
-            "r3": r3,
-            "r5": r5,
-            "log_return": log_r,
-
-            # trend
+            "r1": r1, "r3": r3, "r5": r5,
             "ema_fast": ema_fast,
             "ema_mid": ema_mid,
             "ema_slow": ema_slow,
             "trend_strength": trend_strength,
-            "trend_dir": trend_dir,
-
-            # volatility
             "vol_5": vol_5,
             "vol_10": vol_10,
-
-            # momentum
             "momentum": momentum,
-            "momentum_dir": momentum_dir,
-
-            # regime
-            "market_regime": regime,
+            "market_regime": regime
         }
