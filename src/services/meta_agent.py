@@ -6,8 +6,8 @@ class MetaAgent:
         self.bias = 0.0
         self.patterns = {}
 
-        self.usd_to_czk = 23.0  # fallback
-        self.account_size = 1000  # USD (simulace kapitálu)
+        self.usd_to_czk = 23.0
+        self.account_size = 1000
 
         self.last_stats = {
             "winrate": 0,
@@ -15,7 +15,7 @@ class MetaAgent:
             "patterns": 0
         }
 
-        print("🧠 MetaAgent ready (ultimate + fx + dashboard)")
+        print("🧠 MetaAgent ready (REGIME AI + FX + DASHBOARD)")
 
     # ---------------- DECISION ----------------
     def decide(self, features):
@@ -33,7 +33,9 @@ class MetaAgent:
             h4_vol = features.get("h4_volatility", 0)
 
             trend_score = m15 + h1 + h4
+            regime = features.get("market_regime", "RANGE")
 
+            # 🔥 BASE DECISION
             if trend_score >= 2:
                 action = "BUY"
                 confidence = 0.6
@@ -44,10 +46,32 @@ class MetaAgent:
                 action = "HOLD"
                 confidence = 0.3
 
+            # 🔥 REGIME BIAS
+            if regime == "BULL":
+                if action == "BUY":
+                    confidence += 0.15
+                elif action == "SELL":
+                    confidence -= 0.1
+
+            elif regime == "BEAR":
+                if action == "SELL":
+                    confidence += 0.15
+                elif action == "BUY":
+                    confidence -= 0.1
+
+            elif regime == "RANGE":
+                if action != "HOLD":
+                    confidence -= 0.15
+
+            elif regime == "VOLATILE":
+                confidence *= 0.7
+
+            # 🔥 VOLATILITY BOOST
             vol_score = m15_vol + h1_vol + h4_vol
             confidence += vol_score * 0.05
 
-            key = f"{trend_score}_{vol_score}_{action}"
+            # 🔥 PATTERN MEMORY (REGIME-AWARE)
+            key = f"{regime}_{trend_score}_{vol_score}_{action}"
             if key in self.patterns:
                 confidence += self.patterns[key]
 
@@ -88,7 +112,7 @@ class MetaAgent:
         self.bias += avg_profit * 3
         self.bias = max(-0.4, min(self.bias, 0.4))
 
-        # ---------------- PATTERN LEARNING ----------------
+        # 🔥 PATTERN LEARNING (REGIME-AWARE)
         for t in trades:
             features = t.get("features", {})
             action = t.get("signal")
@@ -96,7 +120,6 @@ class MetaAgent:
 
             if not features or not action:
                 continue
-
             if result not in ["WIN", "LOSS"]:
                 continue
 
@@ -110,16 +133,18 @@ class MetaAgent:
                 + features.get("h4_volatility", 0)
             )
 
+            regime = features.get("market_regime", "RANGE")
+
             trend_score = m15 + h1 + h4
-            key = f"{trend_score}_{vol}_{action}"
+            key = f"{regime}_{trend_score}_{vol}_{action}"
 
             if key not in self.patterns:
                 self.patterns[key] = 0.0
 
-            # 🔥 SMART REWARD
             profit = t.get("profit", 0)
             confidence = t.get("confidence", 0.5)
 
+            # 🔥 ALIGNMENT
             if action == "BUY":
                 aligned = trend_score > 0
             elif action == "SELL":
@@ -131,11 +156,23 @@ class MetaAgent:
             vol_quality = 0.01 if vol >= 2 else -0.01
             conf_bonus = (confidence - 0.5) * 0.05
 
+            # 🔥 REGIME BONUS
+            regime_bonus = 0
+            if regime == "BULL" and action == "BUY":
+                regime_bonus = 0.02
+            elif regime == "BEAR" and action == "SELL":
+                regime_bonus = 0.02
+            elif regime == "RANGE" and action == "HOLD":
+                regime_bonus = 0.02
+            elif regime == "VOLATILE":
+                regime_bonus = -0.01
+
             reward = (
                 profit * 3 +
                 trend_bonus +
                 vol_quality +
-                conf_bonus
+                conf_bonus +
+                regime_bonus
             )
 
             self.patterns[key] += reward
@@ -201,12 +238,10 @@ class MetaAgent:
         avg_win = sum([t.get("profit", 0) for t in wins]) / len(wins) if wins else 0
         avg_loss = sum([t.get("profit", 0) for t in losses]) / len(losses) if losses else 0
 
-        # 🔥 CZK přepočet
         total_czk = total_profit * self.account_size * self.usd_to_czk
         avg_win_czk = avg_win * self.account_size * self.usd_to_czk
         avg_loss_czk = avg_loss * self.account_size * self.usd_to_czk
 
-        # 🔥 streaky
         best_streak = 0
         worst_streak = 0
         cw = cl = 0
@@ -222,7 +257,6 @@ class MetaAgent:
             best_streak = max(best_streak, cw)
             worst_streak = max(worst_streak, cl)
 
-        # 🔥 status
         if winrate > 0.6:
             status = "VYDĚLÁVÁ 🟢"
         elif winrate > 0.45:
