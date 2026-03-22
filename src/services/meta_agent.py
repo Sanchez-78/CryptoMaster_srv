@@ -1,9 +1,15 @@
+from src.services.pattern_cluster import PatternCluster
+
+
 class MetaAgent:
     def __init__(self):
         self.bias = 0.0
         self.patterns = {}
+        self.cluster_stats = {}
 
-        # 📊 statistiky pro UI
+        self.cluster = PatternCluster()
+
+        # 📊 stats
         self.last_stats = {
             "winrate": 0.5,
             "avg_profit": 0.0,
@@ -35,8 +41,9 @@ class MetaAgent:
         elif regime == "BEAR":
             conf += 0.1
 
-        # 🔥 pattern bonus
-        key = f"{regime}_{round(trend,2)}_{action}"
+        # 🔥 cluster pattern bonus
+        key = self.cluster.build(f, action)
+
         if key in self.patterns:
             conf += self.patterns[key]
 
@@ -47,7 +54,7 @@ class MetaAgent:
         return action, conf
 
     # ─────────────────────────────
-    # ⚡ EVENT-DRIVEN LEARNING
+    # ⚡ EVENT LEARNING
     # ─────────────────────────────
     def learn_from_trade(self, trade):
         profit = trade.get("profit", 0)
@@ -61,24 +68,29 @@ class MetaAgent:
         else:
             self.bias -= 0.01
 
-        # clamp bias
         self.bias = max(-0.5, min(self.bias, 0.5))
 
-        # 🔥 pattern learning
+        # 🔥 CLUSTER LEARNING
         f = trade.get("features", {})
-        regime = f.get("market_regime", "R")
-        trend = round(f.get("trend_strength", 0), 2)
         action = trade.get("signal")
 
-        key = f"{regime}_{trend}_{action}"
+        key = self.cluster.build(f, action)
 
+        # pattern score
         if key not in self.patterns:
             self.patterns[key] = 0
 
         self.patterns[key] += profit
         self.patterns[key] = max(-1, min(self.patterns[key], 1))
 
-        # 📊 stats (EMA styl)
+        # 📊 cluster stats
+        if key not in self.cluster_stats:
+            self.cluster_stats[key] = {"count": 0, "profit": 0}
+
+        self.cluster_stats[key]["count"] += 1
+        self.cluster_stats[key]["profit"] += profit
+
+        # 📊 EMA stats
         winrate = self.wins / max(self.total_trades, 1)
 
         self.last_stats["winrate"] = (
@@ -92,7 +104,7 @@ class MetaAgent:
         self.last_stats["patterns"] = len(self.patterns)
 
     # ─────────────────────────────
-    # 🧠 FALLBACK: RAW LEARNING
+    # 🧠 FALLBACK: RAW
     # ─────────────────────────────
     def learn_from_history(self, trades):
         if not trades:
@@ -114,7 +126,7 @@ class MetaAgent:
         self.last_stats["patterns"] = len(self.patterns)
 
     # ─────────────────────────────
-    # 🧠 FALLBACK: COMPRESSED LEARNING
+    # 🧠 FALLBACK: COMPRESSED
     # ─────────────────────────────
     def learn_from_compressed(self, trades):
         if not trades:
@@ -125,7 +137,13 @@ class MetaAgent:
             action = t.get("signal")
             profit = t.get("profit", 0)
 
-            key = f"{f.get('r')}_{round(f.get('t',0),2)}_{action}"
+            fake_features = {
+                "market_regime": f.get("r", "R"),
+                "trend_strength": f.get("t", 0),
+                "vol_10": f.get("v", 0),
+            }
+
+            key = self.cluster.build(fake_features, action)
 
             if key not in self.patterns:
                 self.patterns[key] = 0
@@ -147,3 +165,17 @@ class MetaAgent:
             "bias": round(self.bias, 3),
             "trades": self.total_trades,
         }
+
+    # ─────────────────────────────
+    # 🔥 DEBUG: TOP CLUSTERS
+    # ─────────────────────────────
+    def print_top_clusters(self, n=5):
+        top = sorted(
+            self.cluster_stats.items(),
+            key=lambda x: x[1]["profit"],
+            reverse=True
+        )[:n]
+
+        print("\n🔥 TOP CLUSTERS:")
+        for k, v in top:
+            print(f"{k} | count={v['count']} profit={round(v['profit'],4)}")
