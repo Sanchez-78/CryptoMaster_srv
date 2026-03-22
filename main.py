@@ -12,15 +12,19 @@ from src.services.firebase_client import (
 )
 from src.services.trade_filter import TradeFilter
 from src.services.portfolio_manager import PortfolioManager
+from src.services.feature_engine import FeatureEngine
 
+# ─── KONFIG ────────────────────────────────────────────────────────────────
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "ADAUSDT", "SOLUSDT", "XRPUSDT"]
 LOOP_DELAY = 10
 
 agent = MetaAgent()
 trade_filter = TradeFilter()
 portfolio = PortfolioManager()
+feature_engine = FeatureEngine()
 
 
+# ─── PROGRESS RENDER ───────────────────────────────────────────────────────
 def render_progress(progress):
     print("\n📊 PROGRESS:")
 
@@ -46,6 +50,7 @@ def render_progress(progress):
     print(f"{emoji} {color}[{bar}] {score}%\033[0m")
 
 
+# ─── PIPELINE ──────────────────────────────────────────────────────────────
 def run_pipeline():
     print("\n=== PIPELINE ===")
 
@@ -62,10 +67,10 @@ def run_pipeline():
             "XRPUSDT": 0.6,
         }
 
-    # UPDATE TRADES
-    closed = portfolio.update_trades(prices)
+    # ─── 1. UPDATE OPEN TRADES ─────────────────
+    closed_trades = portfolio.update_trades(prices)
 
-    for trade, profit, result in closed:
+    for trade, profit, result in closed_trades:
         save_signal({
             "symbol": trade["symbol"],
             "signal": trade["action"],
@@ -77,16 +82,23 @@ def run_pipeline():
             "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
         })
 
-    # NEW TRADES
+    # ─── 2. GENERATE NEW TRADES ───────────────
     for symbol in SYMBOLS:
         try:
             price = prices.get(symbol)
             if not price:
                 continue
 
-            features = {
-                "price": price
-            }
+            # 🔥 FEATURE ENGINE (KEY UPGRADE)
+            feature_engine.update(symbol, price)
+            features = feature_engine.build(symbol)
+
+            # 🔥 DEBUG BONUS (vidíš trh)
+            print(
+                f"{symbol} | regime={features.get('market_regime')} "
+                f"| trend={round(features.get('trend_strength',0),5)} "
+                f"| vol={round(features.get('vol_10',0),5)}"
+            )
 
             action, confidence = agent.decide(features)
 
@@ -95,36 +107,49 @@ def run_pipeline():
             if trade:
                 trade["features"] = features
 
+                print(
+                    f"📥 {symbol} {action} | conf={round(confidence,2)}"
+                )
+
         except Exception as e:
             print(f"❌ {symbol}:", e)
+            traceback.print_exc()
 
-    # LEARNING
+    # ─── 3. LEARNING ───────────────────────────
     trades = load_recent_trades(1000)
+
+    print(f"\n📦 Trades: {len(trades)}")
+    print(f"🧠 Patterns: {len(agent.patterns)}")
+
     agent.learn_from_history(trades)
 
-    # 🔥 PROGRESS (FIXED)
+    # ─── 4. PROGRESS (STATE-DRIVEN) ────────────
     progress = agent.get_progress()
     render_progress(progress)
 
-    # SAVE META
+    # ─── 5. SAVE META ──────────────────────────
     save_meta_state({
         "progress": progress,
         "balance": portfolio.balance,
+        "patterns": len(agent.patterns),
         "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
     })
 
+    # ─── 6. PORTFOLIO DEBUG ────────────────────
     portfolio.print_status()
+
     print("=============================\n")
 
 
+# ─── MAIN LOOP ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("🔥 BOT STARTED (CLEAN ARCH)")
+    print("🔥 BOT STARTED (FEATURE ENGINE + AI + PORTFOLIO)")
 
     while True:
         try:
             run_pipeline()
         except Exception as e:
-            print("❌ ERROR:", e)
+            print("❌ PIPELINE ERROR:", e)
             traceback.print_exc()
 
         time.sleep(LOOP_DELAY)
