@@ -1,5 +1,4 @@
 import time
-import random
 import traceback
 from datetime import datetime, UTC
 
@@ -12,6 +11,7 @@ from src.services.firebase_client import (
     save_meta_state,
 )
 from src.services.trade_filter import TradeFilter
+from src.services.portfolio_manager import PortfolioManager
 
 # ─── KONFIG ────────────────────────────────────────────────────────────────
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "ADAUSDT", "SOLUSDT", "XRPUSDT"]
@@ -20,94 +20,10 @@ LOOP_DELAY = 10
 
 agent = MetaAgent()
 trade_filter = TradeFilter()
-last_prices = {}
-
-# 🔥 MARKET REŽIMY
-market_regime = "RANGE"
-regime_timer = 0
-
-
-# ─── SIMULATION++ (REAL MARKET BEHAVIOR) ────────────────────────────────────
-def simulate_trade(action: str, price: float) -> float:
-    global market_regime, regime_timer
-
-    regime_timer += 1
-
-    # změna režimu
-    if regime_timer > 50:
-        regime_timer = 0
-        market_regime = random.choice(["BULL", "BEAR", "RANGE", "VOLATILE"])
-        print(f"🌍 MARKET REGIME → {market_regime}")
-
-    if market_regime == "BULL":
-        drift = 0.001
-        noise = random.uniform(-0.001, 0.002)
-
-    elif market_regime == "BEAR":
-        drift = -0.001
-        noise = random.uniform(-0.002, 0.001)
-
-    elif market_regime == "VOLATILE":
-        drift = random.uniform(-0.001, 0.001)
-        noise = random.uniform(-0.004, 0.004)
-
-    else:  # RANGE
-        drift = 0
-        noise = random.uniform(-0.002, 0.002)
-
-    future = price * (1 + drift + noise)
-
-    if action == "BUY":
-        return (future - price) / price
-    elif action == "SELL":
-        return (price - future) / price
-    return 0.0
-
-
-# ─── FEATURE ENGINE (HISTORY BASED) ────────────────────────────────────────
-def build_features(symbol: str, price: float) -> dict:
-    prev = last_prices.get(symbol, {"history": []})
-    history = prev.get("history", [])
-
-    history.append(price)
-    if len(history) > 20:
-        history.pop(0)
-
-    prev["history"] = history
-
-    def trend(n):
-        if len(history) < n:
-            return 0
-        return 1 if history[-1] > history[-n] else -1
-
-    def volatility(n):
-        if len(history) < n:
-            return 0
-        window = history[-n:]
-        change = max(window) - min(window)
-        return 1 if change / price > 0.003 else 0
-
-    feats = {
-        "price": price,
-
-        "m15_trend": trend(3),
-        "h1_trend": trend(6),
-        "h4_trend": trend(12),
-
-        "m15_volatility": volatility(3),
-        "h1_volatility": volatility(6),
-        "h4_volatility": volatility(12),
-
-        # 🔥 BONUS → AI ví v jakém trhu je
-        "market_regime": market_regime,
-    }
-
-    last_prices[symbol] = prev
-    return feats
-
+portfolio = PortfolioManager()
 
 # ─── META SAVE ─────────────────────────────────────────────────────────────
-def _save_meta(trades: list) -> None:
+def _save_meta(trades: list):
     try:
         wins = [t for t in trades if t.get("result") == "WIN"]
         losses = [t for t in trades if t.get("result") == "LOSS"]
@@ -118,8 +34,9 @@ def _save_meta(trades: list) -> None:
 
         winrate = len(wins) / total
 
-        profits = [t.get("profit", 0) for t in trades if t.get("profit") is not None]
-        avg_profit = sum(profits) / len(profits) if profits else 0
+        profits = [t.get("profit", 0) for t in trades]
+        total_profit = sum(profits)
+        avg_profit = total_profit / total if total else 0
 
         score = int(max(0, min(
             winrate * 50 +
@@ -142,15 +59,13 @@ def _save_meta(trades: list) -> None:
             "total": total,
             "wins": len(wins),
             "losses": len(losses),
-            "avg_profit": round(avg_profit, 5),
-            "total_profit": round(sum(profits), 5),
+            "total_profit": round(total_profit, 5),
             "patterns": len(agent.patterns),
-            "bias": round(agent.bias, 4),
-            "regime": market_regime,
+            "balance": portfolio.balance,
             "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         })
 
-        print(f"📊 META | score={score} status={status} regime={market_regime}")
+        print(f"📊 META | score={score} status={status}")
 
     except Exception as e:
         print("❌ META ERROR:", e)
@@ -173,16 +88,36 @@ def run_pipeline():
             "XRPUSDT": 0.6,
         }
 
+    # ─── 1. UPDATE OPEN TRADES ─────────────────
+    closed_trades = portfolio.update_trades(prices)
+
+    for trade, profit, result in closed_trades:
+        save_signal({
+            "symbol": trade["symbol"],
+            "signal": trade["action"],
+            "confidence": trade["confidence"],
+            "features": trade.get("features", {}),
+            "profit": profit,
+            "result": result,
+            "evaluated": True,
+            "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
+            "mode": "portfolio",
+        })
+
+    # ─── 2. GENERATE NEW SIGNALS ───────────────
     for symbol in SYMBOLS:
         try:
             price = prices.get(symbol)
             if not price:
                 continue
 
-            features = build_features(symbol, price)
+            # 🔥 jednoduché features (bereš z tvého systému / můžeš napojit multiTF)
+            features = {
+                "price": price,
+            }
+
             action, confidence = agent.decide(features)
 
-            # 🔥 filter vypnutý v learning mode
             if not LEARNING_MODE:
                 allowed, reason = trade_filter.allow_trade(action, confidence, features)
                 if not allowed:
@@ -190,43 +125,34 @@ def run_pipeline():
                     continue
                 trade_filter.register_trade()
 
-            profit = simulate_trade(action, price)
-            result = "WIN" if profit > 0 else "LOSS"
+            # 🔥 otevři trade
+            trade, status = portfolio.open_trade(symbol, action, price, confidence)
 
-            save_signal({
-                "symbol": symbol,
-                "signal": action,
-                "confidence": float(confidence),
-                "price": float(price),
-                "features": features,
-                "profit": float(profit),
-                "result": result,
-                "evaluated": True,
-                "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
-                "mode": "learning",
-            })
-
-            print(f"{symbol} {action} | conf={confidence:.2f} | profit={profit:.5f} | {result}")
+            if trade:
+                trade["features"] = features  # uložíme pro learning
 
         except Exception as e:
             print(f"❌ {symbol}:", e)
             traceback.print_exc()
 
-    # 🔥 LEARNING
+    # ─── 3. LEARNING ───────────────────────────
     trades = load_recent_trades(1000)
 
     print(f"\n📦 Trades: {len(trades)}")
     print(f"🧠 Patterns: {len(agent.patterns)}")
 
     agent.learn_from_history(trades)
+
+    # ─── 4. META + DEBUG ───────────────────────
     _save_meta(trades)
+    portfolio.print_status()
 
     print("=============================\n")
 
 
 # ─── MAIN LOOP ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("🔥 BOT STARTED (SIMULATION++)")
+    print("🔥 BOT STARTED (PORTFOLIO MODE)")
 
     while True:
         try:
